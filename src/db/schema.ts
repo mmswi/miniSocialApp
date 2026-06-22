@@ -7,7 +7,7 @@ import {
   timestamp,
   uniqueIndex,
   uuid,
-} from 'drizzle-orm/pg-core';
+} from 'drizzle-orm/pg-core'
 
 /*
  * Auth data model (eng review A1)
@@ -21,7 +21,7 @@ import {
  * Auto-link only when the email is verified on BOTH sides (see auth/linking).
  */
 
-export const authProvider = pgEnum('auth_provider', ['password', 'google']);
+export const authProvider = pgEnum('auth_provider', ['password', 'google'])
 
 export const users = pgTable(
   'users',
@@ -34,7 +34,7 @@ export const users = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('users_email_unique').on(t.email)],
-);
+)
 
 export const accounts = pgTable(
   'accounts',
@@ -52,7 +52,7 @@ export const accounts = pgTable(
     uniqueIndex('accounts_provider_uid_unique').on(t.provider, t.providerUid),
     index('accounts_user_idx').on(t.userId),
   ],
-);
+)
 
 export const sessions = pgTable(
   'sessions',
@@ -68,7 +68,7 @@ export const sessions = pgTable(
     userAgent: text('user_agent'),
   },
   (t) => [index('sessions_user_idx').on(t.userId), index('sessions_expires_idx').on(t.expiresAt)],
-);
+)
 
 export const emailVerificationTokens = pgTable(
   'email_verification_tokens',
@@ -82,9 +82,9 @@ export const emailVerificationTokens = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('email_verification_user_idx').on(t.userId)],
-);
+)
 
-export type User = typeof users.$inferSelect;
-export type NewUser = typeof users.$inferInsert;
-export type Account = typeof accounts.$inferSelect;
-export type Session = typeof sessions.$inferSelect;
+export type User = typeof users.$inferSelect
+export type NewUser = typeof users.$inferInsert
+export type Account = typeof accounts.$inferSelect
+export type Session = typeof sessions.$inferSelect
