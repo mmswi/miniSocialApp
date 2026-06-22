@@ -1,0 +1,32 @@
+# Local dev dependencies. `docker compose up -d` then `bun run db:migrate`.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: redline
+      POSTGRES_PASSWORD: redline
+      POSTGRES_DB: redline
+    # Host 5435 — 5432/5433/5434 are taken by other local stacks (pdf-rag, ourhappymome).
+    ports:
+      - '5435:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U redline']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    # Host 6381 — 6379/6380 are taken by other local stacks.
+    ports:
+      - '6381:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
