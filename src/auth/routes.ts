@@ -3,8 +3,19 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
 import { type User, users } from '../db/schema.ts'
+import { env } from '../lib/env.ts'
 import { badRequest, unauthorized } from '../lib/errors.ts'
-import { SESSION_COOKIE_NAME, clearSessionCookie, setSessionCookie } from './cookies.ts'
+import {
+  OAUTH_STATE_COOKIE,
+  OAUTH_VERIFIER_COOKIE,
+  SESSION_COOKIE_NAME,
+  clearOAuthHandshakeCookies,
+  clearSessionCookie,
+  setOAuthHandshakeCookies,
+  setSessionCookie,
+} from './cookies.ts'
+import { signInWithGoogle } from './google-auth.ts'
+import { createGoogleAuthorization, exchangeGoogleCode } from './oauth.ts'
 import { loginWithPassword, signupWithPassword } from './password-auth.ts'
 import { getSessionUser, revokeSession } from './session.ts'
 
@@ -17,6 +28,11 @@ const signupBody = z.object({
 const loginBody = z.object({
   email: z.string().email(),
   password: z.string().min(1),
+})
+
+const googleCallbackQuery = z.object({
+  code: z.string().min(1),
+  state: z.string().min(1),
 })
 
 // zod's structured issues collapse into one clean 400 (the first field message) — never a 500 or a
@@ -89,5 +105,47 @@ export const authRoutes = async (app: FastifyInstance): Promise<void> => {
       throw unauthorized('not_authenticated', 'Sign in to continue.')
     }
     return { user: publicUser(user) }
+  })
+
+  // Step 1 of the OAuth flow: mint state + PKCE verifier, stash them in short-lived cookies, and
+  // send the browser to Google's consent screen.
+  app.get('/google', async (_req, reply) => {
+    const { url, state, codeVerifier } = createGoogleAuthorization()
+    setOAuthHandshakeCookies(reply, state, codeVerifier)
+    return reply.redirect(url.href)
+  })
+
+  // Step 2: Google redirects back here with a one-time code. We verify the handshake, exchange the
+  // code for the user's identity, sign them in, and bounce to the app. (Error responses are JSON for
+  // now; a browser-facing redirect-to-error-page is frontend work for a later step.)
+  app.get('/google/callback', async (req, reply) => {
+    const query = googleCallbackQuery.safeParse(req.query)
+    const cookieState = req.cookies[OAUTH_STATE_COOKIE]
+    const codeVerifier = req.cookies[OAUTH_VERIFIER_COOKIE]
+
+    // Single-use: clear the handshake cookies up front so a replay can't reuse this state/verifier.
+    clearOAuthHandshakeCookies(reply)
+
+    // Both handshake secrets must be present and well-formed, or this callback didn't come from our
+    // /google redirect.
+    if (!query.success || cookieState === undefined || codeVerifier === undefined) {
+      throw badRequest('invalid_oauth_callback', 'Missing or malformed Google sign-in response.')
+    }
+    // The state from Google must match the one we set (CSRF defense). PKCE is enforced by Google
+    // against the verifier during the code exchange below.
+    if (query.data.state !== cookieState) {
+      throw badRequest(
+        'oauth_state_mismatch',
+        'Google sign-in could not be verified. Please try again.',
+      )
+    }
+
+    const claims = await exchangeGoogleCode(query.data.code, codeVerifier)
+    const { session } = await signInWithGoogle({
+      claims,
+      context: { ip: req.ip, userAgent: req.headers['user-agent'] },
+    })
+    setSessionCookie(reply, session.rawToken, session.expiresAt)
+    return reply.redirect(env.APP_URL)
   })
 }

@@ -1,5 +1,6 @@
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
+import { isUniqueViolation } from '../db/errors.ts'
 import { type User, accounts, users } from '../db/schema.ts'
 import { conflict, unauthorized } from '../lib/errors.ts'
 import { hashPassword, isPasswordCorrect } from './password.ts'
@@ -17,16 +18,6 @@ const normalizeEmail = (email: string): string => email.trim().toLowerCase()
 // difference turns the endpoint into an oracle that confirms which emails are registered.
 const invalidCredentials = (): never => {
   throw unauthorized('invalid_credentials', 'Email or password is incorrect.')
-}
-
-// Postgres reports a UNIQUE violation as SQLSTATE 23505. We let the DB constraint be the race-safe
-// arbiter of "email already taken" instead of a check-then-insert two requests could both pass.
-const isUniqueViolation = (error: unknown): boolean => {
-  if (typeof error !== 'object' || error === null) {
-    return false
-  }
-  const { code } = error as { code?: unknown }
-  return code === '23505'
 }
 
 // Burned on the unknown-email path so a missing account costs about the same wall-clock as a real
