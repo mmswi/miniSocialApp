@@ -241,15 +241,15 @@ You might assume "verified email matches" is the linking rule. It is half of it.
 
 ---
 
-## The honest part: right now, Case 2 can only refuse
+## The honest part: Case 2's success path
 
-Here's a tradeoff worth stating plainly.
+Case 2's *success* path — actually linking — needs a local account that's already **verified**.
 
-Case 2's *success* path — actually linking — needs a local account that's already verified. But the email-verification endpoint doesn't exist yet (it's the next increment). So today, no password account can ever be verified, which means every real "I have a password account, now I'm adding Google" attempt hits the `409 account_exists` and stops.
+When this rule first landed, nothing could produce that. There was no way to verify a password account, so every "I have a password account, now I'm adding Google" attempt hit the `409 account_exists`. The guard was correct, but in practice refuse-only.
 
-That's not a bug. It's the guard being conservative while the verified state it depends on isn't reachable yet. The unit test seeds a verified local account directly to prove the link path is correct and ready — it's just ahead of what the running system can produce until email verification ships.
+Email verification (the next doc) changed that. A password user confirms their address through the link we email; once verified, a Google sign-in with the same address links cleanly. The guard didn't move — the world caught up to it.
 
-Refusing safely now beats linking unsafely now.
+Refusing safely while the verified state was unreachable beat linking unsafely.
 
 ---
 

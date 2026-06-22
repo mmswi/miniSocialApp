@@ -18,6 +18,7 @@ import { signInWithGoogle } from './google-auth.ts'
 import { createGoogleAuthorization, exchangeGoogleCode } from './oauth.ts'
 import { loginWithPassword, signupWithPassword } from './password-auth.ts'
 import { getSessionUser, revokeSession } from './session.ts'
+import { verifyEmailToken } from './verify.ts'
 
 const signupBody = z.object({
   email: z.string().email(),
@@ -33,6 +34,10 @@ const loginBody = z.object({
 const googleCallbackQuery = z.object({
   code: z.string().min(1),
   state: z.string().min(1),
+})
+
+const verifyQuery = z.object({
+  token: z.string().min(1),
 })
 
 // zod's structured issues collapse into one clean 400 (the first field message) — never a 500 or a
@@ -105,6 +110,17 @@ export const authRoutes = async (app: FastifyInstance): Promise<void> => {
       throw unauthorized('not_authenticated', 'Sign in to continue.')
     }
     return { user: publicUser(user) }
+  })
+
+  // Consumes the link we emailed on signup: marks the email verified and bounces to the app. A
+  // missing/unknown/expired token is a clean 400 (distinct codes), never a 500.
+  app.get('/verify', async (req, reply) => {
+    const query = verifyQuery.safeParse(req.query)
+    if (!query.success) {
+      throw badRequest('invalid_verification_token', 'This verification link is invalid.')
+    }
+    await verifyEmailToken(query.data.token)
+    return reply.redirect(`${env.APP_URL}/?verified=1`)
   })
 
   // Step 1 of the OAuth flow: mint state + PKCE verifier, stash them in short-lived cookies, and

@@ -5,6 +5,7 @@ import { type User, accounts, users } from '../db/schema.ts'
 import { conflict, unauthorized } from '../lib/errors.ts'
 import { hashPassword, isPasswordCorrect } from './password.ts'
 import { createSession } from './session.ts'
+import { createEmailVerificationToken, sendVerificationEmail } from './verify.ts'
 
 type CreatedSession = { rawToken: string; expiresAt: Date }
 type AuthResult = { user: User; session: CreatedSession }
@@ -73,6 +74,12 @@ export const signupWithPassword = async (input: {
   }
 
   const session = await createSession({ userId: user.id, ...input.context })
+
+  // Kick off email verification. The dev transport just logs the link; in production this becomes a
+  // queued job so a slow or failing mail provider can never fail the signup itself.
+  const verification = await createEmailVerificationToken(user.id)
+  await sendVerificationEmail(user.email, verification.rawToken)
+
   return { user, session }
 }
 
