@@ -1,18 +1,37 @@
 import cookie from '@fastify/cookie'
+import rateLimit from '@fastify/rate-limit'
 import { sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import Fastify from 'fastify'
+import { authRateLimitOptions } from './auth/ratelimit.ts'
 import { authRoutes } from './auth/routes.ts'
 import { db } from './db/client.ts'
 import { env } from './lib/env.ts'
 import { AppError } from './lib/errors.ts'
 import { redis } from './lib/redis.ts'
 
+type BuildServerOptions = { enableRateLimit?: boolean }
+
 // Uses the process-wide singletons (db, redis, env) directly — the server is the one place that
 // wires the app together, so there is nothing to inject.
-export const buildServer = (): FastifyInstance => {
-  const app = Fastify({ logger: true })
+export const buildServer = (options: BuildServerOptions = {}): FastifyInstance => {
+  // Off by default under test so the functional suites (many requests from one IP) aren't throttled;
+  // the dedicated ratelimit test opts back in. On everywhere else.
+  const enableRateLimit = options.enableRateLimit ?? env.NODE_ENV !== 'test'
+  // trustProxy resolves req.ip from X-Forwarded-For, but only for the configured proxy hop (set via
+  // env in prod); empty in dev means req.ip is the raw socket address. Per-IP rate limiting is only
+  // correct when req.ip is the real client, so this and the limiter are deliberately coupled.
+  const app = Fastify({
+    logger: true,
+    trustProxy: env.TRUST_PROXY === '' ? false : env.TRUST_PROXY,
+  })
   app.register(cookie, { secret: env.COOKIE_SECRET })
+
+  // Registered before the routes so each auth route's `config.rateLimit` is applied. The plugin is
+  // fastify-plugin-wrapped, so this single registration also covers the routes in the /auth child.
+  if (enableRateLimit) {
+    app.register(rateLimit, authRateLimitOptions)
+  }
 
   // Our deliberate AppErrors become clean responses; anything else is an unexpected bug, so we
   // log it and return a generic 500 — internals never reach the client.

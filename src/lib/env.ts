@@ -3,6 +3,11 @@ import { z } from 'zod'
 const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  // Set to the trusted proxy/load-balancer address or CIDR block (Classless Inter-Domain Routing —
+  // an IP range like 10.0.0.0/8) in production so req.ip is the real client (per-IP rate limiting
+  // depends on it). Empty = trust no proxy. NEVER set a value that blindly trusts client-supplied
+  // X-Forwarded-For — that lets an attacker spoof a fresh IP per request and walk past the limiter.
+  TRUST_PROXY: z.string().default(''),
   COOKIE_SECRET: z.string().min(16),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
