@@ -1,8 +1,9 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { inArray } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { users } from '../db/schema.ts'
+import { sentEmails } from '../lib/email.ts'
 import { buildServer } from '../server.ts'
 import { SESSION_COOKIE_NAME } from './cookies.ts'
 
@@ -28,6 +29,16 @@ const sessionTokenFrom = (response: InjectResponse): string | undefined =>
 const signup = (email: string): Promise<InjectResponse> =>
   app.inject({ method: 'POST', url: '/auth/signup', payload: { email, password } })
 
+const login = (email: string): Promise<InjectResponse> =>
+  app.inject({ method: 'POST', url: '/auth/login', payload: { email, password } })
+
+// Signup no longer logs you in (uniform no-enumeration response), so a test that needs an
+// authenticated session does the two steps a real user does: sign up, then log in.
+const signupThenLogin = async (email: string): Promise<InjectResponse> => {
+  await signup(email)
+  return login(email)
+}
+
 afterAll(async () => {
   if (createdEmails.length > 0) {
     await db.delete(users).where(inArray(users.email, createdEmails))
@@ -36,19 +47,23 @@ afterAll(async () => {
 })
 
 describe('POST /auth/signup', () => {
-  test('creates a user and sets a session cookie', async () => {
+  test('returns a uniform 200 and emails a verification link to a new address', async () => {
     const email = uniqueEmail('signup-ok')
+    const sentBefore = sentEmails.length
     const response = await signup(email)
-    expect(response.statusCode).toBe(201)
-    const body = response.json<{ user: { email: string; emailVerified: boolean } }>()
-    expect(body.user.email).toBe(email)
-    expect(body.user.emailVerified).toBe(false)
-    expect(sessionTokenFrom(response)).toBeDefined()
+
+    expect(response.statusCode).toBe(200)
+    // Signup no longer logs you in — a taken email has no session to grant, so granting one only on
+    // the new path would itself reveal which emails are new.
+    expect(sessionTokenFrom(response)).toBeUndefined()
+    // The account really was created: a verification link was emailed to this address.
+    const verification = sentEmails.slice(sentBefore).find((message) => message.to === email)
+    expect(verification?.subject).toContain('Verify')
   })
 
-  test('the new session authenticates GET /auth/me', async () => {
+  test('after signup you log in, and the session authenticates GET /auth/me', async () => {
     const email = uniqueEmail('signup-me')
-    const token = sessionTokenFrom(await signup(email))
+    const token = sessionTokenFrom(await signupThenLogin(email))
     const me = await app.inject({
       method: 'GET',
       url: '/auth/me',
@@ -58,12 +73,19 @@ describe('POST /auth/signup', () => {
     expect(me.json<{ user: { email: string } }>().user.email).toBe(email)
   })
 
-  test('a second signup with the same email is a 409 conflict, not a second user', async () => {
+  test('a duplicate signup creates no second user and emails "you already have an account"', async () => {
     const email = uniqueEmail('signup-dupe')
-    expect((await signup(email)).statusCode).toBe(201)
+    await signup(email)
+    const sentBefore = sentEmails.length
     const second = await signup(email)
-    expect(second.statusCode).toBe(409)
-    expect(second.json<{ error: string }>().error).toBe('email_taken')
+
+    expect(second.statusCode).toBe(200)
+    // The UNIQUE index held: still exactly one user for this email, no second row from the retry.
+    const rows = await db.select().from(users).where(eq(users.email, email))
+    expect(rows).toHaveLength(1)
+    // The owner is told via their inbox — not via the response — that the account already exists.
+    const notice = sentEmails.slice(sentBefore).find((message) => message.to === email)
+    expect(notice?.subject).toContain('already have')
   })
 
   test('a too-short password is rejected with a 400 field error', async () => {
@@ -85,12 +107,19 @@ describe('POST /auth/signup', () => {
     expect(response.statusCode).toBe(400)
   })
 
-  // KNOWN GAP tracked for A5/A9: until the email-send path exists, a duplicate signup returns a
-  // distinct 409, which is an email-enumeration oracle. The fix is a uniform "check your email"
-  // response. Skipped (not absent) so the suite reports the gap rather than implying signup is
-  // already enumeration-safe.
-  test.skip('does not reveal whether an email is already registered (uniform response, needs A5)', () => {
-    // Implemented in A5 once signup can send a "you already have an account" email instead of 409.
+  // The A9 enumeration fix: a new email and an already-registered one must be indistinguishable from
+  // outside. The differentiating signal moved into the inbox (above); the HTTP response carries none.
+  test('does not reveal whether an email is already registered (uniform response)', async () => {
+    const email = uniqueEmail('signup-enum')
+    const fresh = await signup(email) // first time: a new account
+    const repeat = await signup(email) // second time: the email is taken
+
+    // Byte-identical status line and body — no new-vs-taken signal in the response.
+    expect(repeat.statusCode).toBe(fresh.statusCode)
+    expect(repeat.body).toBe(fresh.body)
+    // And neither path sets a session cookie; a cookie on only one path would itself be the oracle.
+    expect(sessionTokenFrom(fresh)).toBeUndefined()
+    expect(sessionTokenFrom(repeat)).toBeUndefined()
   })
 })
 
@@ -133,7 +162,7 @@ describe('POST /auth/login', () => {
 describe('POST /auth/logout', () => {
   test('revokes the session so the next request is 401', async () => {
     const email = uniqueEmail('logout')
-    const token = sessionTokenFrom(await signup(email))
+    const token = sessionTokenFrom(await signupThenLogin(email))
     const cookie = `${SESSION_COOKIE_NAME}=${token}`
 
     expect(

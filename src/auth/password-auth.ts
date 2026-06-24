@@ -2,10 +2,14 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { isUniqueViolation } from '../db/errors.ts'
 import { type User, accounts, users } from '../db/schema.ts'
-import { conflict, unauthorized } from '../lib/errors.ts'
+import { unauthorized } from '../lib/errors.ts'
 import { hashPassword, isPasswordCorrect } from './password.ts'
 import { createSession } from './session.ts'
-import { createEmailVerificationToken, sendVerificationEmail } from './verify.ts'
+import {
+  createEmailVerificationToken,
+  sendAccountExistsEmail,
+  sendVerificationEmail,
+} from './verify.ts'
 
 type CreatedSession = { rawToken: string; expiresAt: Date }
 type AuthResult = { user: User; session: CreatedSession }
@@ -32,22 +36,28 @@ const verifyAgainstDecoy = async (password: string): Promise<void> => {
   await isPasswordCorrect(timingEqualizerHash, password)
 }
 
-// Creates the identity (users) + the credential (accounts) atomically, then opens a session.
+// Uniform, no-enumeration signup. The response is identical whether the email is new or already
+// registered (see the route) — the only differentiating signal goes to the inbox, which just the
+// address owner can read. So this returns nothing the caller could leak: it creates the account and
+// emails the verification link, or, on a duplicate, emails a "you already have an account" notice.
 export const signupWithPassword = async (input: {
   email: string
   password: string
   name?: string
-  context?: SessionContext
-}): Promise<AuthResult> => {
+}): Promise<void> => {
   const email = normalizeEmail(input.email)
+  // Hash up front, on BOTH paths, even though the duplicate path discards it: argon2id (~50ms) is the
+  // dominant cost, so paying it whether or not the email exists keeps signup timing-uniform. A
+  // deliberate timing equalizer (like login's verifyAgainstDecoy) — do NOT move it after the insert,
+  // or the taken path would skip the hash and become a present-vs-absent timing oracle.
   const passwordHash = await hashPassword(input.password)
 
-  let user: User
+  let createdUserId: string
   try {
     // One transaction: a user must never exist without the credential row that authenticates them.
     // The UNIQUE indexes on users(email) and accounts(provider, provider_uid) make a duplicate
     // signup fail and roll back here — even under a double-submit race — so we get exactly one user.
-    user = await db.transaction(async (tx) => {
+    createdUserId = await db.transaction(async (tx) => {
       const [createdUser] = await tx
         .insert(users)
         .values({ email, name: input.name ?? null })
@@ -61,26 +71,24 @@ export const signupWithPassword = async (input: {
         providerUid: email,
         passwordHash,
       })
-      return createdUser
+      return createdUser.id
     })
   } catch (error: unknown) {
-    // KNOWN GAP (A5/A9): a distinct 409 here lets an attacker enumerate registered emails. The
-    // no-enumeration fix is a uniform "check your email" response, which needs the email-send path
-    // from A5; until that exists this stays a conflict. Tracked by a skipped test in routes.test.ts.
+    // The email is already registered. We must not signal that to the caller — instead we notify the
+    // real owner by email, so the endpoint stays uniform and an attacker probing emails learns nothing.
     if (isUniqueViolation(error)) {
-      throw conflict('email_taken', 'That email is already registered.')
+      await sendAccountExistsEmail(email)
+      return
     }
     throw error
   }
 
-  const session = await createSession({ userId: user.id, ...input.context })
-
-  // Kick off email verification. The dev transport just logs the link; in production this becomes a
-  // queued job so a slow or failing mail provider can never fail the signup itself.
-  const verification = await createEmailVerificationToken(user.id)
-  await sendVerificationEmail(user.email, verification.rawToken)
-
-  return { user, session }
+  // New account: email the verification link. Signup deliberately does NOT open a session — a taken
+  // email has none to grant, so "sometimes a session" would itself be the oracle we're closing. The
+  // user logs in (or follows the verify link) as a separate step. The dev transport just logs the
+  // link; in production the send becomes a queued job so a slow mail provider can't fail the signup.
+  const verification = await createEmailVerificationToken(createdUserId)
+  await sendVerificationEmail(email, verification.rawToken)
 }
 
 // Verifies a password credential and, on success, opens a fresh session.

@@ -65,14 +65,12 @@ const publicUser = (user: User) => ({
 export const authRoutes = async (app: FastifyInstance): Promise<void> => {
   app.post('/signup', { config: { rateLimit: AUTH_RATE_LIMITS.signup } }, async (req, reply) => {
     const input = parseOrThrow(signupBody, req.body)
-    const { user, session } = await signupWithPassword({
-      email: input.email,
-      password: input.password,
-      name: input.name,
-      context: { ip: req.ip, userAgent: req.headers['user-agent'] },
-    })
-    setSessionCookie(reply, session.rawToken, session.expiresAt)
-    return reply.code(201).send({ user: publicUser(user) })
+    await signupWithPassword({ email: input.email, password: input.password, name: input.name })
+    // Uniform response: byte-identical whether the email was new or already registered. The signal
+    // that differs (a verification link vs a "you already have an account" notice) goes to the inbox,
+    // which only the address owner can read — so the endpoint itself is no longer an enumeration
+    // oracle. As a consequence signup no longer logs you in; that's a separate step (POST /login).
+    return reply.code(200).send({ message: 'Check your email to finish signing up.' })
   })
 
   app.post('/login', { config: { rateLimit: AUTH_RATE_LIMITS.login } }, async (req, reply) => {

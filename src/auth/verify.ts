@@ -68,3 +68,14 @@ export const sendVerificationEmail = async (to: string, rawToken: string): Promi
     text: `Confirm your email by opening this link:\n\n${verificationLink(rawToken)}\n\nIt expires in 24 hours.`,
   })
 }
+
+// Sent on a duplicate signup INSTEAD of a 409 — the signup response is byte-identical to a fresh one,
+// so the endpoint never reveals that an email is registered. Only the real owner, reading this inbox,
+// learns a signup was attempted, with a nudge to just log in. No token: there's nothing to verify here.
+export const sendAccountExistsEmail = async (to: string): Promise<void> => {
+  await sendEmail({
+    to,
+    subject: 'You already have a redline account',
+    text: `Someone tried to sign up for redline with this email, but you already have an account.\n\nIf this was you, just log in instead:\n\n${env.APP_URL}/login\n\nIf it wasn't you, you can ignore this email — nothing was created or changed.`,
+  })
+}

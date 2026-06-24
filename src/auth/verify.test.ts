@@ -87,7 +87,13 @@ describe('email verification tokens', () => {
 
   test('signing up issues exactly one verification token for the new, unverified user', async () => {
     const email = `verify-signup-${randomUUID()}@example.test`
-    const { user } = await signupWithPassword({ email, password: 'a real enough password' })
+    await signupWithPassword({ email, password: 'a real enough password' })
+
+    // Signup no longer returns the user (uniform no-enumeration response); fetch it by email.
+    const [user] = await db.select().from(users).where(eq(users.email, email))
+    if (user === undefined) {
+      throw new Error('signup did not create the user')
+    }
     createdUserIds.push(user.id)
 
     expect(user.emailVerified).toBe(false)
@@ -148,8 +154,13 @@ describe('signup → emailed link → verify → login (end to end)', () => {
       url: '/auth/signup',
       payload: { email, password },
     })
-    expect(signup.statusCode).toBe(201)
-    const userId = signup.json<{ user: { id: string } }>().user.id
+    expect(signup.statusCode).toBe(200)
+    // Signup returns no user now; look it up by email to drive the rest of the flow.
+    const [created] = await db.select().from(users).where(eq(users.email, email))
+    if (created === undefined) {
+      throw new Error('signup did not create the user')
+    }
+    const userId = created.id
     createdUserIds.push(userId)
 
     // Pull the verification link out of the email we "sent" — the only place the raw token exists.
