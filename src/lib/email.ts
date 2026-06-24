@@ -1,7 +1,7 @@
 import { type Transporter, createTransport } from 'nodemailer'
 import { env } from './env.ts'
 
-type EmailMessage = { to: string; subject: string; text: string }
+export type EmailMessage = { to: string; subject: string; text: string }
 
 // Captured in-memory under `bun test` so an end-to-end test can read back the link we "sent" — signup
 // only ever emails the raw token, since the DB keeps just its hash. Empty in dev and production.
@@ -25,9 +25,9 @@ const mailer = (): Transporter => {
 }
 
 // Sends a message over SMTP. In dev that's the local Mailpit catcher (read it at http://localhost:8025);
-// in production it's a real provider. Throws on a transport failure — callers that must not fail on a
-// mail hiccup (signup) catch it; a queued retry layer is the later hardening. Under test we skip SMTP
-// entirely and record the message so a test can assert on it.
+// in production it's a real provider. Throws on a transport failure — that throw is deliberate: the
+// email worker calls this, and a rejection is what makes BullMQ retry the job with backoff instead of
+// losing the mail. Under test we skip SMTP entirely and record the message so a test can assert on it.
 export const sendEmail = async (message: EmailMessage): Promise<void> => {
   if (env.NODE_ENV === 'test') {
     sentEmails.push(message)

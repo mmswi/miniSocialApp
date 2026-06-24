@@ -1,9 +1,9 @@
 import { eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { emailVerificationTokens, users } from '../db/schema.ts'
-import { sendEmail } from '../lib/email.ts'
 import { env } from '../lib/env.ts'
 import { badRequest } from '../lib/errors.ts'
+import { enqueueEmail } from '../queue/email-queue.ts'
 import { generateToken, hashToken } from './tokens.ts'
 
 const VERIFICATION_TTL_MS = 1000 * 60 * 60 * 24 // 24 hours
@@ -61,19 +61,22 @@ export const verifyEmailToken = async (rawToken: string): Promise<{ userId: stri
 const verificationLink = (rawToken: string): string =>
   `${env.APP_URL}/auth/verify?token=${rawToken}`
 
+// Renders the verification message and hands it to the durable queue — the worker does the actual SMTP
+// send, with retries, so a transient mail failure here can't lose the link. The raw token rides in the
+// job payload because only its hash is stored in the DB; jobs are short-lived and dropped on success.
 export const sendVerificationEmail = async (to: string, rawToken: string): Promise<void> => {
-  await sendEmail({
+  await enqueueEmail({
     to,
     subject: 'Verify your email for redline',
     text: `Confirm your email by opening this link:\n\n${verificationLink(rawToken)}\n\nIt expires in 24 hours.`,
   })
 }
 
-// Sent on a duplicate signup INSTEAD of a 409 — the signup response is byte-identical to a fresh one,
+// Queued on a duplicate signup INSTEAD of a 409 — the signup response is byte-identical to a fresh one,
 // so the endpoint never reveals that an email is registered. Only the real owner, reading this inbox,
 // learns a signup was attempted, with a nudge to just log in. No token: there's nothing to verify here.
 export const sendAccountExistsEmail = async (to: string): Promise<void> => {
-  await sendEmail({
+  await enqueueEmail({
     to,
     subject: 'You already have a redline account',
     text: `Someone tried to sign up for redline with this email, but you already have an account.\n\nIf this was you, just log in instead:\n\n${env.APP_URL}/login\n\nIf it wasn't you, you can ignore this email — nothing was created or changed.`,

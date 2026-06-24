@@ -36,15 +36,16 @@ const verifyAgainstDecoy = async (password: string): Promise<void> => {
   await isPasswordCorrect(timingEqualizerHash, password)
 }
 
-// Mail must never fail a signup: the user row is already committed, and on the duplicate path a thrown
-// send would also break the uniform response and reopen the enumeration oracle A9 closed. So both sends
-// are best-effort — log and move on. Delivery resilience (a retry queue) is later hardening, not the
-// signup's job. BOTH send sites go through this, or the new-vs-taken failure behavior would diverge.
-const sendSignupEmail = async (send: () => Promise<void>): Promise<void> => {
+// Queueing an email must never fail a signup: the user row is already committed, and on the duplicate
+// path a thrown enqueue would also break the uniform response and reopen the enumeration oracle A9
+// closed. So both enqueues are best-effort — log and move on. Delivery resilience now lives in the
+// queue+worker (retries with backoff); enqueueing only touches Redis, so the only thing left to guard
+// here is a rare Redis hiccup. BOTH email sites go through this, or new-vs-taken behavior would diverge.
+const enqueueSignupEmail = async (enqueue: () => Promise<void>): Promise<void> => {
   try {
-    await send()
+    await enqueue()
   } catch (error: unknown) {
-    console.error('[signup] notification email failed to send; signup still succeeds', error)
+    console.error('[signup] could not queue the notification email; signup still succeeds', error)
   }
 }
 
@@ -89,18 +90,18 @@ export const signupWithPassword = async (input: {
     // The email is already registered. We must not signal that to the caller — instead we notify the
     // real owner by email, so the endpoint stays uniform and an attacker probing emails learns nothing.
     if (isUniqueViolation(error)) {
-      await sendSignupEmail(() => sendAccountExistsEmail(email))
+      await enqueueSignupEmail(() => sendAccountExistsEmail(email))
       return
     }
     throw error
   }
 
-  // New account: email the verification link. Signup deliberately does NOT open a session — a taken
+  // New account: queue the verification email. Signup deliberately does NOT open a session — a taken
   // email has none to grant, so "sometimes a session" would itself be the oracle we're closing. The
   // user logs in (or follows the verify link) as a separate step. The token row is a real DB write (a
-  // failure there is a genuine 500); only the send itself is best-effort (see sendSignupEmail).
+  // failure there is a genuine 500); only the enqueue is best-effort (see enqueueSignupEmail).
   const verification = await createEmailVerificationToken(createdUserId)
-  await sendSignupEmail(() => sendVerificationEmail(email, verification.rawToken))
+  await enqueueSignupEmail(() => sendVerificationEmail(email, verification.rawToken))
 }
 
 // Verifies a password credential and, on success, opens a fresh session.

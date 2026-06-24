@@ -7,6 +7,8 @@
   "scripts": {
     "api": "PORT=3001 APP_URL=http://localhost:3000 bun run --watch src/server.ts",
     "api:start": "bun run src/server.ts",
+    "worker": "bun run --watch src/worker.ts",
+    "worker:start": "bun run src/worker.ts",
     "api:test": "bun test \"$PWD/src/\"",
     "api:typecheck": "tsc --noEmit",
     "api:lint": "biome check src test",
@@ -26,6 +28,7 @@
     "@fastify/rate-limit": "^11.0.0",
     "@node-rs/argon2": "^2.0.0",
     "arctic": "^3.0.0",
+    "bullmq": "^5.79.1",
     "drizzle-orm": "^0.38.0",
     "fastify": "^5.0.0",
     "ioredis": "^5.4.0",

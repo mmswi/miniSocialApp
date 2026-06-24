@@ -9,6 +9,7 @@ import { db } from './db/client.ts'
 import { env } from './lib/env.ts'
 import { AppError } from './lib/errors.ts'
 import { redis } from './lib/redis.ts'
+import { createEmailWorker } from './queue/email-worker.ts'
 
 type BuildServerOptions = { enableRateLimit?: boolean }
 
@@ -72,6 +73,15 @@ const startFromCli = async (): Promise<void> => {
   try {
     const address = await app.listen({ port: env.PORT, host: '0.0.0.0' })
     app.log.info(`listening on ${address}`)
+    // Dev convenience: co-locate the queue worker so a single `bun run api` still delivers email end to
+    // end (no second terminal to remember). Production runs the worker as its OWN process
+    // (`bun run src/worker.ts`) — there, a slow mail provider must never tie up an API container. Same
+    // worker module either way. `bun run api` uses --watch, which RESTARTS the process on change, so the
+    // worker is recreated fresh each time, not leaked.
+    if (env.NODE_ENV === 'development') {
+      createEmailWorker()
+      app.log.info('email worker started in-process (dev only)')
+    }
   } catch (error: unknown) {
     app.log.error({ err: error }, 'failed to start')
     process.exit(1)
