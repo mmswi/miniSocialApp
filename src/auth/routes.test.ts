@@ -159,6 +159,56 @@ describe('POST /auth/login', () => {
   })
 })
 
+// Session fixation (A9 rotation half / A7 security case): an attacker who plants a known session id in
+// the victim's browser before login must NOT have that id become authenticated after login. Our defense
+// is that login always mints a brand-new id via createSession and never adopts the incoming cookie.
+describe('session fixation', () => {
+  test('login issues a fresh session id and never adopts a client-supplied one', async () => {
+    const email = uniqueEmail('fixation')
+    await signup(email)
+
+    const plantedToken = `attacker-planted-${randomUUID()}`
+    const login = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email, password },
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${plantedToken}` },
+    })
+    expect(login.statusCode).toBe(200)
+
+    // The issued session is a NEW id, not the one the attacker planted.
+    const issuedToken = sessionTokenFrom(login)
+    expect(issuedToken).toBeDefined()
+    expect(issuedToken).not.toBe(plantedToken)
+
+    // The planted id never became valid — it authenticates nothing.
+    const withPlanted = await app.inject({
+      method: 'GET',
+      url: '/auth/me',
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${plantedToken}` },
+    })
+    expect(withPlanted.statusCode).toBe(401)
+
+    // Only the freshly issued id does.
+    const withIssued = await app.inject({
+      method: 'GET',
+      url: '/auth/me',
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${issuedToken}` },
+    })
+    expect(withIssued.statusCode).toBe(200)
+  })
+
+  test('two logins for the same user mint different session ids (rotation)', async () => {
+    const email = uniqueEmail('fixation-rotate')
+    await signup(email)
+    const first = sessionTokenFrom(await login(email))
+    const second = sessionTokenFrom(await login(email))
+    expect(first).toBeDefined()
+    expect(second).toBeDefined()
+    expect(first).not.toBe(second)
+  })
+})
+
 describe('POST /auth/logout', () => {
   test('revokes the session so the next request is 401', async () => {
     const email = uniqueEmail('logout')
