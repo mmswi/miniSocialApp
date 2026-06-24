@@ -78,3 +78,12 @@ export const API_login = (input: {
   request('/auth/login', { method: 'POST', body: JSON.stringify(input) })
 
 export const API_logout = (): Promise<null> => request('/auth/logout', { method: 'POST' })
+
+export const API_forgotPassword = (input: { email: string }): Promise<{ message: string }> =>
+  request('/auth/forgot-password', { method: 'POST', body: JSON.stringify(input) })
+
+export const API_resetPassword = (input: {
+  token: string
+  password: string
+}): Promise<{ message: string }> =>
+  request('/auth/reset-password', { method: 'POST', body: JSON.stringify(input) })

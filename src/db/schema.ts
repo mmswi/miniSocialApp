@@ -95,6 +95,21 @@ export const emailVerificationTokens = pgTable(
   (t) => [index('email_verification_user_idx').on(t.userId)],
 )
 
+export const passwordResetTokens = pgTable(
+  'password_reset_tokens',
+  {
+    // sha256(rawToken); the reset link carries the raw token. Single-use and short-lived (1h) — a
+    // higher-risk action than email verification, so a tighter window. Same hash-at-rest shape.
+    id: text('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('password_reset_user_idx').on(t.userId)],
+)
+
 export type User = typeof users.$inferSelect
 export type NewUser = typeof users.$inferInsert
 export type Account = typeof accounts.$inferSelect

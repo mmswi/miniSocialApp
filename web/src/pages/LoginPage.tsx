@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react'
+import { type SyntheticEvent, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
 import { AuthCard } from '../components/AuthCard'
@@ -11,13 +11,14 @@ export const LoginPage = () => {
   const { refresh } = useAuth()
   const [searchParams] = useSearchParams()
   const justVerified = searchParams.get('verified') === '1'
+  const justReset = searchParams.get('reset') === '1'
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
 
-  const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
+  const onSubmit = async (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault()
     setError(null)
     setPending(true)
@@ -39,6 +40,11 @@ export const LoginPage = () => {
           Email verified. Log in to continue.
         </p>
       ) : null}
+      {justReset ? (
+        <p className="mb-4 rounded-md bg-green-50 px-3 py-2 text-sm text-green-800">
+          Password updated. Log in with your new password.
+        </p>
+      ) : null}
       <form onSubmit={onSubmit} className="space-y-3">
         <TextField
           label="Email"
@@ -56,6 +62,11 @@ export const LoginPage = () => {
           value={password}
           onChange={(event) => setPassword(event.target.value)}
         />
+        <div className="text-right">
+          <Link to="/forgot-password" className="text-sm text-slate-500 underline">
+            Forgot password?
+          </Link>
+        </div>
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
         <Button type="submit" disabled={pending}>
           {pending ? 'Logging in…' : 'Log in'}

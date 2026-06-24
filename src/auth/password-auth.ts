@@ -16,8 +16,9 @@ type AuthResult = { user: User; session: CreatedSession }
 type SessionContext = { ip?: string; userAgent?: string }
 
 // Emails are matched case-insensitively: we store and look them up in one canonical (trimmed,
-// lowercased) form, so `Mara@x.com` and `mara@x.com` can never become two separate accounts.
-const normalizeEmail = (email: string): string => email.trim().toLowerCase()
+// lowercased) form, so `Mara@x.com` and `mara@x.com` can never become two separate accounts. Exported
+// so the password-reset lookup canonicalizes identically — a mismatch there would be a silent miss.
+export const normalizeEmail = (email: string): string => email.trim().toLowerCase()
 
 // A login must answer identically whether the email is unknown OR the password is wrong — any
 // difference turns the endpoint into an oracle that confirms which emails are registered.

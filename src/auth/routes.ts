@@ -21,19 +21,32 @@ import { signInWithGoogle } from './google-auth.ts'
 import { linkGoogleAccount } from './linking.ts'
 import { createGoogleAuthorization, exchangeGoogleCode } from './oauth.ts'
 import { loginWithPassword, signupWithPassword } from './password-auth.ts'
+import { requestPasswordReset, resetPassword } from './password-reset.ts'
 import { AUTH_RATE_LIMITS } from './ratelimit.ts'
 import { getSessionUser, revokeSession } from './session.ts'
 import { verifyEmailToken } from './verify.ts'
 
+// The one place the new-password rule lives, so signup and reset can never drift apart.
+const passwordField = z.string().min(8, 'Password must be at least 8 characters.').max(200)
+
 const signupBody = z.object({
   email: z.string().email(),
-  password: z.string().min(8, 'Password must be at least 8 characters.').max(200),
+  password: passwordField,
   name: z.string().trim().min(1).max(100).optional(),
 })
 
 const loginBody = z.object({
   email: z.string().email(),
   password: z.string().min(1),
+})
+
+const forgotPasswordBody = z.object({
+  email: z.string().email(),
+})
+
+const resetPasswordBody = z.object({
+  token: z.string().min(1),
+  password: passwordField,
 })
 
 const googleCallbackQuery = z.object({
@@ -101,6 +114,34 @@ export const authRoutes = async (app: FastifyInstance): Promise<void> => {
     const linkedProviders = await getLinkedProviders(user.id)
     return reply.send({ user: publicUser(user, linkedProviders) })
   })
+
+  // Forgot password, step 1: email a reset link. Uniform 200 whether or not that email has a password
+  // account — the service only acts when one exists, and reveals nothing here, so the endpoint is no
+  // enumeration oracle (mirrors signup A9). The differentiating signal goes to the inbox.
+  app.post(
+    '/forgot-password',
+    { config: { rateLimit: AUTH_RATE_LIMITS.forgotPassword } },
+    async (req, reply) => {
+      const input = parseOrThrow(forgotPasswordBody, req.body)
+      await requestPasswordReset(input.email)
+      return reply.code(200).send({
+        message: 'If that email has an account, we sent a password reset link.',
+      })
+    },
+  )
+
+  // Forgot password, step 2: consume the emailed token and set the new password. A missing/expired/used
+  // token is a clean, distinct 400 (never a 500). On success every session is revoked, so the user
+  // re-authenticates with the new password — we deliberately do NOT open a session here.
+  app.post(
+    '/reset-password',
+    { config: { rateLimit: AUTH_RATE_LIMITS.resetPassword } },
+    async (req, reply) => {
+      const input = parseOrThrow(resetPasswordBody, req.body)
+      await resetPassword(input.token, input.password)
+      return reply.code(200).send({ message: 'Your password has been reset. You can now log in.' })
+    },
+  )
 
   app.post('/logout', async (req, reply) => {
     const rawToken = req.cookies[SESSION_COOKIE_NAME]

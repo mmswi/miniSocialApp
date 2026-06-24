@@ -3,12 +3,10 @@ import { Link } from 'react-router-dom'
 import { AuthCard } from '../components/AuthCard'
 import { Button } from '../components/Button'
 import { TextField } from '../components/TextField'
-import { API_signup, ApiError } from '../lib/api'
+import { API_forgotPassword, ApiError } from '../lib/api'
 
-export const SignupPage = () => {
+export const ForgotPasswordPage = () => {
   const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [submitted, setSubmitted] = useState(false)
@@ -18,13 +16,16 @@ export const SignupPage = () => {
     setError(null)
     setPending(true)
     try {
-      const trimmedName = name.trim()
-      await API_signup({ email, password, name: trimmedName === '' ? undefined : trimmedName })
-      // The backend answers the same whether the email is new or taken (no enumeration), so the UI
-      // does too: always show "check your email", never "that email is taken".
+      await API_forgotPassword({ email })
+      // The backend answers identically whether or not the email has an account (no enumeration), so
+      // the UI does too: always "check your email", never "no account with that email".
       setSubmitted(true)
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not sign up. Please try again.')
+      setError(
+        caught instanceof ApiError
+          ? caught.message
+          : 'Could not send the reset link. Please try again.',
+      )
     } finally {
       setPending(false)
     }
@@ -34,8 +35,8 @@ export const SignupPage = () => {
     return (
       <AuthCard title="Check your email">
         <p className="text-sm text-slate-600">
-          If <strong>{email}</strong> can be registered, we just sent it a verification link. Open
-          it to finish signing up, then log in.
+          If <strong>{email}</strong> has an account, we just sent it a link to reset your password.
+          It expires in 1 hour.
         </p>
         <p className="mt-3 text-xs text-slate-400">
           Local dev: the message is waiting in Mailpit at{' '}
@@ -54,14 +55,11 @@ export const SignupPage = () => {
   }
 
   return (
-    <AuthCard title="Create your redline account">
+    <AuthCard title="Reset your password">
+      <p className="mb-4 text-sm text-slate-600">
+        Enter your email and we'll send you a link to set a new password.
+      </p>
       <form onSubmit={onSubmit} className="space-y-3">
-        <TextField
-          label="Name (optional)"
-          autoComplete="name"
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-        />
         <TextField
           label="Email"
           type="email"
@@ -70,22 +68,13 @@ export const SignupPage = () => {
           value={email}
           onChange={(event) => setEmail(event.target.value)}
         />
-        <TextField
-          label="Password"
-          type="password"
-          autoComplete="new-password"
-          required
-          minLength={8}
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-        />
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
         <Button type="submit" disabled={pending}>
-          {pending ? 'Creating…' : 'Sign up'}
+          {pending ? 'Sending…' : 'Send reset link'}
         </Button>
       </form>
       <p className="mt-4 text-center text-sm text-slate-600">
-        Already have an account?{' '}
+        Remembered it?{' '}
         <Link to="/login" className="font-medium text-slate-900 underline">
           Log in
         </Link>

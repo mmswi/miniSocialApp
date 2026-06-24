@@ -9,6 +9,11 @@ export const AUTH_RATE_LIMITS = {
   login: { max: 10, timeWindow: '1 minute' },
   verify: { max: 10, timeWindow: '1 minute' },
   google: { max: 10, timeWindow: '1 minute' },
+  // forgot is as tight as signup — it triggers an outbound email, so an open one is a spam/probe vector.
+  // reset is a touch higher (a user fat-fingering a new password retries) but still bounded against
+  // brute-forcing the token, though its 256 bits of entropy already make that hopeless.
+  forgotPassword: { max: 5, timeWindow: '1 minute' },
+  resetPassword: { max: 10, timeWindow: '1 minute' },
 } as const
 
 // Plugin options. The Redis store shares the count across the planned 2 instances — one attacker
