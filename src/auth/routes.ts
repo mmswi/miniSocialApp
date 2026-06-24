@@ -6,15 +6,19 @@ import { type User, users } from '../db/schema.ts'
 import { env } from '../lib/env.ts'
 import { badRequest, unauthorized } from '../lib/errors.ts'
 import {
+  OAUTH_LINK_COOKIE,
   OAUTH_STATE_COOKIE,
   OAUTH_VERIFIER_COOKIE,
   SESSION_COOKIE_NAME,
   clearOAuthHandshakeCookies,
+  clearOAuthLinkCookie,
   clearSessionCookie,
   setOAuthHandshakeCookies,
+  setOAuthLinkCookie,
   setSessionCookie,
 } from './cookies.ts'
 import { signInWithGoogle } from './google-auth.ts'
+import { linkGoogleAccount } from './linking.ts'
 import { createGoogleAuthorization, exchangeGoogleCode } from './oauth.ts'
 import { loginWithPassword, signupWithPassword } from './password-auth.ts'
 import { AUTH_RATE_LIMITS } from './ratelimit.ts'
@@ -127,8 +131,30 @@ export const authRoutes = async (app: FastifyInstance): Promise<void> => {
   app.get('/google', { config: { rateLimit: AUTH_RATE_LIMITS.google } }, async (_req, reply) => {
     const { url, state, codeVerifier } = createGoogleAuthorization()
     setOAuthHandshakeCookies(reply, state, codeVerifier)
+    // Definitively a sign-in, not a link: clear any marker an abandoned /google/link left behind, so
+    // the shared callback can't misread this flow as a link.
+    clearOAuthLinkCookie(reply)
     return reply.redirect(url.href)
   })
+
+  // Manual account linking, step 1: a signed-in user attaches their Google identity (the resolution
+  // for the "sign in with your password to link Google" prompt). Same handshake as /google, plus the
+  // link marker so the shared callback links to THIS user instead of starting a new sign-in.
+  app.get(
+    '/google/link',
+    { config: { rateLimit: AUTH_RATE_LIMITS.google } },
+    async (req, reply) => {
+      const rawToken = req.cookies[SESSION_COOKIE_NAME]
+      const active = rawToken === undefined ? null : await getSessionUser(rawToken)
+      if (active === null) {
+        throw unauthorized('not_authenticated', 'Sign in before linking a Google account.')
+      }
+      const { url, state, codeVerifier } = createGoogleAuthorization()
+      setOAuthHandshakeCookies(reply, state, codeVerifier)
+      setOAuthLinkCookie(reply)
+      return reply.redirect(url.href)
+    },
+  )
 
   // Step 2: Google redirects back here with a one-time code. We verify the handshake, exchange the
   // code for the user's identity, sign them in, and bounce to the app. (Error responses are JSON for
@@ -140,8 +166,11 @@ export const authRoutes = async (app: FastifyInstance): Promise<void> => {
       const query = googleCallbackQuery.safeParse(req.query)
       const cookieState = req.cookies[OAUTH_STATE_COOKIE]
       const codeVerifier = req.cookies[OAUTH_VERIFIER_COOKIE]
+      // Read the mode before clearing: did /google or /google/link start this round trip?
+      const isLinkFlow = req.cookies[OAUTH_LINK_COOKIE] !== undefined
 
-      // Single-use: clear the handshake cookies up front so a replay can't reuse this state/verifier.
+      // Single-use: clear the handshake cookies (state, verifier, AND the link marker) up front so a
+      // replay can't reuse them.
       clearOAuthHandshakeCookies(reply)
 
       // Both handshake secrets must be present and well-formed, or this callback didn't come from our
@@ -149,8 +178,9 @@ export const authRoutes = async (app: FastifyInstance): Promise<void> => {
       if (!query.success || cookieState === undefined || codeVerifier === undefined) {
         throw badRequest('invalid_oauth_callback', 'Missing or malformed Google sign-in response.')
       }
-      // The state from Google must match the one we set (CSRF defense). PKCE is enforced by Google
-      // against the verifier during the code exchange below.
+      // The state from Google must match the one we set (CSRF defense, and the binding that stops an
+      // attacker's code from being linked into a victim's account). PKCE is enforced by Google against
+      // the verifier during the code exchange below.
       if (query.data.state !== cookieState) {
         throw badRequest(
           'oauth_state_mismatch',
@@ -159,6 +189,20 @@ export const authRoutes = async (app: FastifyInstance): Promise<void> => {
       }
 
       const claims = await exchangeGoogleCode(query.data.code, codeVerifier)
+
+      // Link flow: attach the Google identity to the signed-in user. Re-check the session NOW — the
+      // marker cookie only says "this was a link attempt"; the session is what proves WHO is linking,
+      // and it may have expired during the round trip to Google's consent screen.
+      if (isLinkFlow) {
+        const rawToken = req.cookies[SESSION_COOKIE_NAME]
+        const active = rawToken === undefined ? null : await getSessionUser(rawToken)
+        if (active === null) {
+          throw unauthorized('not_authenticated', 'Your session expired. Sign in and link again.')
+        }
+        await linkGoogleAccount({ userId: active.userId, claims })
+        return reply.redirect(`${env.APP_URL}/?linked=google`)
+      }
+
       const { session } = await signInWithGoogle({
         claims,
         context: { ip: req.ip, userAgent: req.headers['user-agent'] },

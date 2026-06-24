@@ -5,7 +5,7 @@ import { db } from '../db/client.ts'
 import { users } from '../db/schema.ts'
 import { sentEmails } from '../lib/email.ts'
 import { buildServer } from '../server.ts'
-import { SESSION_COOKIE_NAME } from './cookies.ts'
+import { OAUTH_LINK_COOKIE, SESSION_COOKIE_NAME } from './cookies.ts'
 
 // Integration tests — they exercise the real /auth routes against the dockerized Postgres + Redis
 // through Fastify's in-process `inject` (no socket). Every test uses throwaway emails and the suite
@@ -186,5 +186,25 @@ describe('GET /auth/me', () => {
   test('without a session cookie is 401', async () => {
     const response = await app.inject({ method: 'GET', url: '/auth/me' })
     expect(response.statusCode).toBe(401)
+  })
+})
+
+describe('GET /auth/google/link (manual account linking)', () => {
+  test('without a session is 401 — you must be signed in to link', async () => {
+    const res = await app.inject({ method: 'GET', url: '/auth/google/link' })
+    expect(res.statusCode).toBe(401)
+  })
+
+  test('with a session redirects to Google and sets the link marker', async () => {
+    const token = sessionTokenFrom(await signupThenLogin(uniqueEmail('glink')))
+    const res = await app.inject({
+      method: 'GET',
+      url: '/auth/google/link',
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${token}` },
+    })
+    expect(res.statusCode).toBe(302)
+    expect(String(res.headers.location)).toContain('accounts.google.com')
+    // The marker is what tells the shared callback to link rather than sign in.
+    expect(res.cookies.some((cookie) => cookie.name === OAUTH_LINK_COOKIE)).toBe(true)
   })
 })

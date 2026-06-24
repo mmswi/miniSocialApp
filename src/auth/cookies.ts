@@ -56,7 +56,24 @@ export const setOAuthHandshakeCookies = (
   reply.setCookie(OAUTH_VERIFIER_COOKIE, codeVerifier, handshakeCookie())
 }
 
+// A third handshake marker, set ONLY by the link-mode start route (/auth/google/link). The shared
+// callback reads it to decide "attach Google to the signed-in user" vs "sign in". It carries no secret,
+// just the mode — so it needs no integrity protection; the session cookie is what proves WHO is linking.
+export const OAUTH_LINK_COOKIE = 'redline_oauth_link'
+
+export const setOAuthLinkCookie = (reply: FastifyReply): void => {
+  reply.setCookie(OAUTH_LINK_COOKIE, '1', handshakeCookie())
+}
+
+// The normal sign-in start (/auth/google) clears this, so a marker left over from an abandoned link
+// flow can't make the shared callback mistake a plain sign-in for a link. Both start routes therefore
+// write a DEFINITIVE mode — link sets it, sign-in clears it — and the callback never reads a stale one.
+export const clearOAuthLinkCookie = (reply: FastifyReply): void => {
+  reply.clearCookie(OAUTH_LINK_COOKIE, handshakeCookie())
+}
+
 export const clearOAuthHandshakeCookies = (reply: FastifyReply): void => {
   reply.clearCookie(OAUTH_STATE_COOKIE, handshakeCookie())
   reply.clearCookie(OAUTH_VERIFIER_COOKIE, handshakeCookie())
+  reply.clearCookie(OAUTH_LINK_COOKIE, handshakeCookie())
 }
