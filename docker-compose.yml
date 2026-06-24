@@ -28,5 +28,14 @@ services:
       timeout: 3s
       retries: 5
 
+  # Local SMTP catcher: the app sends here in dev, and you read/click the emails at the web UI on
+  # http://localhost:8025. Nothing leaves your machine. In production these env vars point at a real
+  # SMTP provider (Resend/SES) instead — the app code doesn't change.
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - '1025:1025' # SMTP — matches SMTP_PORT in .env
+      - '8025:8025' # web UI
+
 volumes:
   pgdata:

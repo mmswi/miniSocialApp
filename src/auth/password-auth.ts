@@ -36,6 +36,18 @@ const verifyAgainstDecoy = async (password: string): Promise<void> => {
   await isPasswordCorrect(timingEqualizerHash, password)
 }
 
+// Mail must never fail a signup: the user row is already committed, and on the duplicate path a thrown
+// send would also break the uniform response and reopen the enumeration oracle A9 closed. So both sends
+// are best-effort — log and move on. Delivery resilience (a retry queue) is later hardening, not the
+// signup's job. BOTH send sites go through this, or the new-vs-taken failure behavior would diverge.
+const sendSignupEmail = async (send: () => Promise<void>): Promise<void> => {
+  try {
+    await send()
+  } catch (error: unknown) {
+    console.error('[signup] notification email failed to send; signup still succeeds', error)
+  }
+}
+
 // Uniform, no-enumeration signup. The response is identical whether the email is new or already
 // registered (see the route) — the only differentiating signal goes to the inbox, which just the
 // address owner can read. So this returns nothing the caller could leak: it creates the account and
@@ -77,7 +89,7 @@ export const signupWithPassword = async (input: {
     // The email is already registered. We must not signal that to the caller — instead we notify the
     // real owner by email, so the endpoint stays uniform and an attacker probing emails learns nothing.
     if (isUniqueViolation(error)) {
-      await sendAccountExistsEmail(email)
+      await sendSignupEmail(() => sendAccountExistsEmail(email))
       return
     }
     throw error
@@ -85,10 +97,10 @@ export const signupWithPassword = async (input: {
 
   // New account: email the verification link. Signup deliberately does NOT open a session — a taken
   // email has none to grant, so "sometimes a session" would itself be the oracle we're closing. The
-  // user logs in (or follows the verify link) as a separate step. The dev transport just logs the
-  // link; in production the send becomes a queued job so a slow mail provider can't fail the signup.
+  // user logs in (or follows the verify link) as a separate step. The token row is a real DB write (a
+  // failure there is a genuine 500); only the send itself is best-effort (see sendSignupEmail).
   const verification = await createEmailVerificationToken(createdUserId)
-  await sendVerificationEmail(email, verification.rawToken)
+  await sendSignupEmail(() => sendVerificationEmail(email, verification.rawToken))
 }
 
 // Verifies a password credential and, on success, opens a fresh session.

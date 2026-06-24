@@ -16,6 +16,17 @@ const envSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().default(''),
   GOOGLE_REDIRECT_URI: z.string().url().default('http://localhost:3000/auth/google/callback'),
   EMAIL_FROM: z.string().default('noreply@localhost'),
+  // SMTP transport for outbound mail. Defaults target the local Mailpit container (docker-compose);
+  // in production these point at a real provider (Resend/SES). SMTP_SECURE is parsed from an explicit
+  // 'true'/'false' string — z.coerce.boolean() would read the string 'false' as truthy (a classic trap).
+  SMTP_HOST: z.string().default('localhost'),
+  SMTP_PORT: z.coerce.number().default(1025),
+  SMTP_SECURE: z
+    .string()
+    .default('false')
+    .transform((value) => value === 'true'),
+  SMTP_USER: z.string().default(''),
+  SMTP_PASS: z.string().default(''),
 })
 
 export type Env = z.infer<typeof envSchema>
