@@ -21,7 +21,18 @@ import {
  * Auto-link only when the email is verified on BOTH sides (see auth/linking).
  */
 
-export const authProvider = pgEnum('auth_provider', ['password', 'google'])
+// The auth methods an account can represent — the single source of truth for the provider value.
+// The pgEnum, the column type, and every `provider` comparison across the app derive from these
+// names, so a typo'd 'gogle' anywhere is a compile error instead of a silent miss.
+export const AUTH_PROVIDERS = { password: 'password', google: 'google' } as const
+// ...Id, not AuthProvider: one identifier per meaning across the repo. `AuthProvider` is the React
+// auth-context component on the client, so the provider-id union is `AuthProviderId` everywhere.
+export type AuthProviderId = (typeof AUTH_PROVIDERS)[keyof typeof AUTH_PROVIDERS]
+
+export const authProvider = pgEnum('auth_provider', [
+  AUTH_PROVIDERS.password,
+  AUTH_PROVIDERS.google,
+])
 
 export const users = pgTable(
   'users',

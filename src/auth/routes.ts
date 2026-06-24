@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
-import { type User, users } from '../db/schema.ts'
+import { type AuthProviderId, type User, accounts, users } from '../db/schema.ts'
 import { env } from '../lib/env.ts'
 import { badRequest, unauthorized } from '../lib/errors.ts'
 import {
@@ -56,12 +56,25 @@ const parseOrThrow = <Output>(schema: z.ZodType<Output>, body: unknown): Output 
   return result.data
 }
 
-// The client never sees the password hash or internal columns — only this safe projection.
-const publicUser = (user: User) => ({
+// Which sign-in methods this user has set up. The client uses it to show "Connect Google" only when
+// google isn't already linked — so someone who signed in WITH Google never sees a button offering to
+// connect the very account they just used.
+const getLinkedProviders = async (userId: string): Promise<AuthProviderId[]> => {
+  const rows = await db
+    .select({ provider: accounts.provider })
+    .from(accounts)
+    .where(eq(accounts.userId, userId))
+  return rows.map((row) => row.provider)
+}
+
+// The client never sees the password hash or internal columns — only this safe projection, plus the
+// set of linked providers so the UI can reflect which sign-in methods are connected.
+const publicUser = (user: User, linkedProviders: AuthProviderId[]) => ({
   id: user.id,
   email: user.email,
   emailVerified: user.emailVerified,
   name: user.name,
+  linkedProviders,
 })
 
 // Registered under the /auth prefix. Encapsulated as its own plugin; it inherits the app's cookie
@@ -85,7 +98,8 @@ export const authRoutes = async (app: FastifyInstance): Promise<void> => {
       context: { ip: req.ip, userAgent: req.headers['user-agent'] },
     })
     setSessionCookie(reply, session.rawToken, session.expiresAt)
-    return reply.send({ user: publicUser(user) })
+    const linkedProviders = await getLinkedProviders(user.id)
+    return reply.send({ user: publicUser(user, linkedProviders) })
   })
 
   app.post('/logout', async (req, reply) => {
@@ -112,7 +126,8 @@ export const authRoutes = async (app: FastifyInstance): Promise<void> => {
     if (user === undefined) {
       throw unauthorized('not_authenticated', 'Sign in to continue.')
     }
-    return { user: publicUser(user) }
+    const linkedProviders = await getLinkedProviders(user.id)
+    return { user: publicUser(user, linkedProviders) }
   })
 
   // Consumes the link we emailed on signup: marks the email verified and bounces to the app. A

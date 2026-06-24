@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { eq, inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { users } from '../db/schema.ts'
+import { AUTH_PROVIDERS, accounts, users } from '../db/schema.ts'
 import { sentEmails } from '../lib/email.ts'
 import { buildServer } from '../server.ts'
 import { OAUTH_LINK_COOKIE, SESSION_COOKIE_NAME } from './cookies.ts'
@@ -236,6 +236,48 @@ describe('GET /auth/me', () => {
   test('without a session cookie is 401', async () => {
     const response = await app.inject({ method: 'GET', url: '/auth/me' })
     expect(response.statusCode).toBe(401)
+  })
+
+  // Drives the dashboard's "Connect Google" button: a password-only account reports ['password'], so
+  // the UI knows google is NOT linked yet and shows the connect button.
+  test('reports the linked sign-in providers', async () => {
+    const email = uniqueEmail('me-providers')
+    const token = sessionTokenFrom(await signupThenLogin(email))
+    const me = await app.inject({
+      method: 'GET',
+      url: '/auth/me',
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${token}` },
+    })
+    expect(me.statusCode).toBe(200)
+    expect(me.json<{ user: { linkedProviders: string[] } }>().user.linkedProviders).toEqual([
+      AUTH_PROVIDERS.password,
+    ])
+  })
+
+  // The exact reported bug: a user with a google identity still saw "Connect Google". Once google is
+  // linked, /me must report it so the dashboard hides the button instead of offering a no-op re-link.
+  test('reports google once a google identity is linked', async () => {
+    const email = uniqueEmail('me-google')
+    const token = sessionTokenFrom(await signupThenLogin(email))
+    const [user] = await db.select().from(users).where(eq(users.email, email))
+    if (user === undefined) {
+      throw new Error('expected the signed-up user to exist')
+    }
+    await db.insert(accounts).values({
+      userId: user.id,
+      provider: AUTH_PROVIDERS.google,
+      providerUid: `google-${randomUUID()}`,
+    })
+
+    const me = await app.inject({
+      method: 'GET',
+      url: '/auth/me',
+      headers: { cookie: `${SESSION_COOKIE_NAME}=${token}` },
+    })
+    expect(me.statusCode).toBe(200)
+    expect(me.json<{ user: { linkedProviders: string[] } }>().user.linkedProviders).toContain(
+      AUTH_PROVIDERS.google,
+    )
   })
 })
 

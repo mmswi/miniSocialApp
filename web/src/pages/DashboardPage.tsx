@@ -1,6 +1,7 @@
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
 import { Button } from '../components/Button'
+import { CLIENT_AUTH_PROVIDERS } from '../lib/api'
 
 export const DashboardPage = () => {
   const { user, signOut } = useAuth()
@@ -17,6 +18,10 @@ export const DashboardPage = () => {
   if (user === null) {
     return null
   }
+
+  // Hide "Connect Google" once it's linked: a user who signed in with Google already has it, and
+  // re-linking the same identity is a confusing no-op (it returns success but changes nothing).
+  const isGoogleLinked = user.linkedProviders.includes(CLIENT_AUTH_PROVIDERS.google)
 
   return (
     <div className="mx-auto max-w-xl px-4 py-10">
@@ -48,13 +53,19 @@ export const DashboardPage = () => {
           </div>
         </dl>
         <div className="mt-6 space-y-2">
-          <Button
-            variant="secondary"
-            type="button"
-            onClick={() => window.location.assign('/auth/google/link')}
-          >
-            Connect Google account
-          </Button>
+          {isGoogleLinked ? (
+            <div className="flex items-center justify-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-600">
+              <span className="text-green-700">✓</span> Google account connected
+            </div>
+          ) : (
+            <Button
+              variant="secondary"
+              type="button"
+              onClick={() => window.location.assign('/auth/google/link')}
+            >
+              Connect Google account
+            </Button>
+          )}
           <Button type="button" onClick={onSignOut}>
             Log out
           </Button>

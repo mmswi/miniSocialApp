@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { accounts, users } from '../db/schema.ts'
+import { AUTH_PROVIDERS, accounts, users } from '../db/schema.ts'
 import { signInWithGoogle } from './google-auth.ts'
 import { linkGoogleAccount } from './linking.ts'
 import type { GoogleClaims } from './oauth.ts'
@@ -36,7 +36,7 @@ const googleRowsFor = (userId: string) =>
   db
     .select()
     .from(accounts)
-    .where(and(eq(accounts.userId, userId), eq(accounts.provider, 'google')))
+    .where(and(eq(accounts.userId, userId), eq(accounts.provider, AUTH_PROVIDERS.google)))
 
 afterAll(async () => {
   if (createdEmails.length > 0) {

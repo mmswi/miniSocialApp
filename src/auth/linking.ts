@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { isUniqueViolation } from '../db/errors.ts'
-import { accounts } from '../db/schema.ts'
+import { AUTH_PROVIDERS, accounts } from '../db/schema.ts'
 import { conflict } from '../lib/errors.ts'
 import type { GoogleClaims } from './oauth.ts'
 
@@ -25,7 +25,12 @@ export const linkGoogleAccount = async (input: {
   const [existingLink] = await db
     .select()
     .from(accounts)
-    .where(and(eq(accounts.provider, 'google'), eq(accounts.providerUid, claims.googleUserId)))
+    .where(
+      and(
+        eq(accounts.provider, AUTH_PROVIDERS.google),
+        eq(accounts.providerUid, claims.googleUserId),
+      ),
+    )
     .limit(1)
   if (existingLink !== undefined) {
     // Already this user's → linking again is a no-op success. Someone else's → refuse: a Google
@@ -45,7 +50,7 @@ export const linkGoogleAccount = async (input: {
   const [ownGoogleAccount] = await db
     .select()
     .from(accounts)
-    .where(and(eq(accounts.provider, 'google'), eq(accounts.userId, userId)))
+    .where(and(eq(accounts.provider, AUTH_PROVIDERS.google), eq(accounts.userId, userId)))
     .limit(1)
   if (ownGoogleAccount !== undefined) {
     throw conflict('google_link_exists', 'Your account already has a linked Google identity.')
@@ -54,7 +59,7 @@ export const linkGoogleAccount = async (input: {
   try {
     await db
       .insert(accounts)
-      .values({ userId, provider: 'google', providerUid: claims.googleUserId })
+      .values({ userId, provider: AUTH_PROVIDERS.google, providerUid: claims.googleUserId })
   } catch (error: unknown) {
     // Race: a concurrent link claimed the same sub between our check and this insert. The UNIQUE index
     // is the real judge — translate its violation into the same clean conflict, never a 500.

@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { accounts, users } from '../db/schema.ts'
+import { AUTH_PROVIDERS, accounts, users } from '../db/schema.ts'
 import { signInWithGoogle } from './google-auth.ts'
 import type { GoogleClaims } from './oauth.ts'
 import { hashPassword } from './password.ts'
@@ -45,7 +45,12 @@ describe('signInWithGoogle', () => {
     const [linked] = await db
       .select()
       .from(accounts)
-      .where(and(eq(accounts.provider, 'google'), eq(accounts.providerUid, claims.googleUserId)))
+      .where(
+        and(
+          eq(accounts.provider, AUTH_PROVIDERS.google),
+          eq(accounts.providerUid, claims.googleUserId),
+        ),
+      )
     expect(linked?.userId).toBe(user.id)
   })
 
@@ -67,7 +72,7 @@ describe('signInWithGoogle', () => {
     }
     await db.insert(accounts).values({
       userId: local.id,
-      provider: 'password',
+      provider: AUTH_PROVIDERS.password,
       providerUid: email,
       passwordHash: await hashPassword('a real enough password'),
     })
@@ -78,7 +83,7 @@ describe('signInWithGoogle', () => {
     const googleRows = await db
       .select()
       .from(accounts)
-      .where(and(eq(accounts.userId, local.id), eq(accounts.provider, 'google')))
+      .where(and(eq(accounts.userId, local.id), eq(accounts.provider, AUTH_PROVIDERS.google)))
     expect(googleRows.length).toBe(1)
   })
 

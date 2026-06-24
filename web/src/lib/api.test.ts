@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest'
-import { API_fetchMe, API_logout, ApiError } from './api'
+import { API_fetchMe, API_logout, ApiError, CLIENT_AUTH_PROVIDERS } from './api'
 
 // Builds a fake fetch Response with just the bits our request() helper reads.
 const fakeFetch = (status: number, body: unknown) =>
@@ -17,7 +17,15 @@ describe('api request helper', () => {
   test('returns the parsed body on a 2xx', async () => {
     vi.stubGlobal(
       'fetch',
-      fakeFetch(200, { user: { id: '1', email: 'a@b.c', emailVerified: true, name: null } }),
+      fakeFetch(200, {
+        user: {
+          id: '1',
+          email: 'a@b.c',
+          emailVerified: true,
+          name: null,
+          linkedProviders: [CLIENT_AUTH_PROVIDERS.password],
+        },
+      }),
     )
     const { user } = await API_fetchMe()
     expect(user.email).toBe('a@b.c')
@@ -44,7 +52,7 @@ describe('api request helper', () => {
 
   test('always sends the session cookie (credentials: include)', async () => {
     const fetchSpy = fakeFetch(200, {
-      user: { id: '1', email: 'a@b.c', emailVerified: false, name: null },
+      user: { id: '1', email: 'a@b.c', emailVerified: false, name: null, linkedProviders: [] },
     })
     vi.stubGlobal('fetch', fetchSpy)
     await API_fetchMe()

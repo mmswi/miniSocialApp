@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { isUniqueViolation } from '../db/errors.ts'
-import { type User, accounts, users } from '../db/schema.ts'
+import { AUTH_PROVIDERS, type User, accounts, users } from '../db/schema.ts'
 import { unauthorized } from '../lib/errors.ts'
 import { hashPassword, isPasswordCorrect } from './password.ts'
 import { createSession } from './session.ts'
@@ -79,7 +79,7 @@ export const signupWithPassword = async (input: {
       }
       await tx.insert(accounts).values({
         userId: createdUser.id,
-        provider: 'password',
+        provider: AUTH_PROVIDERS.password,
         providerUid: email,
         passwordHash,
       })
@@ -116,7 +116,7 @@ export const loginWithPassword = async (input: {
   const [account] = await db
     .select()
     .from(accounts)
-    .where(and(eq(accounts.provider, 'password'), eq(accounts.providerUid, email)))
+    .where(and(eq(accounts.provider, AUTH_PROVIDERS.password), eq(accounts.providerUid, email)))
     .limit(1)
 
   if (account === undefined || account.passwordHash === null) {

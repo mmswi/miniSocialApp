@@ -1,9 +1,23 @@
+// The sign-in methods the API reports in `linkedProviders`. The frontend's OWN copy of the backend's
+// auth_provider enum, kept deliberately separate: importing the server's AUTH_PROVIDERS from
+// db/schema.ts would drag drizzle-orm into the client bundle. The CLIENT_ prefix marks these as
+// independent mirrors of one wire contract — not a shared source — so a reader never assumes they
+// auto-sync. Naming each value once also keeps call sites off bare 'google' strings a typo could break.
+export const CLIENT_AUTH_PROVIDERS = { password: 'password', google: 'google' } as const
+// A name unique to the client: distinct from the `AuthProvider` component (auth/AuthProvider.tsx) AND
+// from the server's `AuthProviderId` (db/schema.ts). Nothing in web/ can auto-import the wrong one, and
+// the two mirrored unions can never be mistaken for one shared type.
+export type ClientAuthProviderId =
+  (typeof CLIENT_AUTH_PROVIDERS)[keyof typeof CLIENT_AUTH_PROVIDERS]
+
 // The safe user projection the backend returns (never the password hash or internal columns).
 export type PublicUser = {
   id: string
   email: string
   emailVerified: boolean
   name: string | null
+  // Which sign-in methods are connected — lets the UI hide "Connect Google" once google is linked.
+  linkedProviders: ClientAuthProviderId[]
 }
 
 // Mirrors the backend's error envelope ({ error, message }) so the UI can show a real message and

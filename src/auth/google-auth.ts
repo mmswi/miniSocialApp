@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { isUniqueViolation } from '../db/errors.ts'
-import { type User, accounts, users } from '../db/schema.ts'
+import { AUTH_PROVIDERS, type User, accounts, users } from '../db/schema.ts'
 import { conflict } from '../lib/errors.ts'
 import type { GoogleClaims } from './oauth.ts'
 import { createSession } from './session.ts'
@@ -35,7 +35,12 @@ export const signInWithGoogle = async (input: {
   const [googleAccount] = await db
     .select()
     .from(accounts)
-    .where(and(eq(accounts.provider, 'google'), eq(accounts.providerUid, claims.googleUserId)))
+    .where(
+      and(
+        eq(accounts.provider, AUTH_PROVIDERS.google),
+        eq(accounts.providerUid, claims.googleUserId),
+      ),
+    )
     .limit(1)
   if (googleAccount !== undefined) {
     return openSessionFor(await loadUser(googleAccount.userId), input.context)
@@ -58,7 +63,7 @@ export const signInWithGoogle = async (input: {
     }
     await db.insert(accounts).values({
       userId: existingUser.id,
-      provider: 'google',
+      provider: AUTH_PROVIDERS.google,
       providerUid: claims.googleUserId,
     })
     return openSessionFor(existingUser, input.context)
@@ -83,7 +88,7 @@ export const signInWithGoogle = async (input: {
       }
       await tx.insert(accounts).values({
         userId: inserted.id,
-        provider: 'google',
+        provider: AUTH_PROVIDERS.google,
         providerUid: claims.googleUserId,
       })
       return inserted
@@ -97,7 +102,12 @@ export const signInWithGoogle = async (input: {
       const [racedAccount] = await db
         .select()
         .from(accounts)
-        .where(and(eq(accounts.provider, 'google'), eq(accounts.providerUid, claims.googleUserId)))
+        .where(
+          and(
+            eq(accounts.provider, AUTH_PROVIDERS.google),
+            eq(accounts.providerUid, claims.googleUserId),
+          ),
+        )
         .limit(1)
       if (racedAccount !== undefined) {
         return openSessionFor(await loadUser(racedAccount.userId), input.context)
