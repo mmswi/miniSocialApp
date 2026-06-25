@@ -27,6 +27,29 @@ export const clearSessionCookie = (reply: FastifyReply): void => {
   reply.clearCookie(SESSION_COOKIE_NAME, baseSessionCookie())
 }
 
+// During a 2FA login the user is HALF-authenticated: the password passed, but no session exists yet.
+// We carry that pending state in a short-lived httpOnly cookie holding a raw token whose hash keys a
+// Redis entry (see auth/mfa.ts). It is deliberately a SEPARATE cookie from the session — getSessionUser
+// must never accept it — so a half-auth token can never be mistaken for a real, fully-authed session.
+export const MFA_COOKIE_NAME = 'redline_mfa'
+
+// Same flags as the session cookie. The lifetime is the caller's `expiresAt`, set to match the Redis
+// entry's TTL so the cookie and the server-side pending state lapse together.
+const baseMfaCookie = (): CookieSerializeOptions => ({
+  httpOnly: true,
+  secure: env.NODE_ENV === 'production',
+  sameSite: 'lax',
+  path: '/',
+})
+
+export const setMfaCookie = (reply: FastifyReply, rawToken: string, expiresAt: Date): void => {
+  reply.setCookie(MFA_COOKIE_NAME, rawToken, { ...baseMfaCookie(), expires: expiresAt })
+}
+
+export const clearMfaCookie = (reply: FastifyReply): void => {
+  reply.clearCookie(MFA_COOKIE_NAME, baseMfaCookie())
+}
+
 // During a Google sign-in we hand the browser two short-lived secrets and ask for them back on the
 // callback: the `state` (CSRF — proves the callback came from our redirect) and the PKCE
 // `codeVerifier` (proves this client started the exchange). They live only for the round trip.
