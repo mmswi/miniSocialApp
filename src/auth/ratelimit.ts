@@ -14,6 +14,12 @@ export const AUTH_RATE_LIMITS = {
   // brute-forcing the token, though its 256 bits of entropy already make that hopeless.
   forgotPassword: { max: 5, timeWindow: '1 minute' },
   resetPassword: { max: 10, timeWindow: '1 minute' },
+  // Enrolling/listing passkeys happens behind an existing session, so it's lower-risk; keep it in
+  // line with login. The second-factor login steps match the login limit. Recovery is the brute-force
+  // surface (a typed code, not a 256-bit token), so it's the tightest — a wrong code burns an attempt.
+  twoFactorRegister: { max: 10, timeWindow: '1 minute' },
+  twoFactorAuthenticate: { max: 10, timeWindow: '1 minute' },
+  twoFactorRecovery: { max: 5, timeWindow: '1 minute' },
 } as const
 
 // Plugin options. The Redis store shares the count across the planned 2 instances — one attacker

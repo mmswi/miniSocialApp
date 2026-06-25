@@ -10,10 +10,18 @@ import {
   sendAccountExistsEmail,
   sendVerificationEmail,
 } from './verify.ts'
+import { hasEnrolledPasskey } from './webauthn.ts'
 
 type CreatedSession = { rawToken: string; expiresAt: Date }
-type AuthResult = { user: User; session: CreatedSession }
 type SessionContext = { ip?: string; userAgent?: string }
+
+// A correct password is necessary but, for a 2FA user, not sufficient. So login has two outcomes:
+// fully authenticated (a session is minted), or "password OK, now prove the second factor" — in which
+// case NO session is created and the caller starts the passkey step. mfa_required is only ever
+// returned AFTER a correct password, so it can't become an oracle for whether an email has 2FA.
+export type PasswordLoginResult =
+  | { status: 'authenticated'; user: User; session: CreatedSession }
+  | { status: 'mfa_required'; userId: string }
 
 // Emails are matched case-insensitively: we store and look them up in one canonical (trimmed,
 // lowercased) form, so `Mara@x.com` and `mara@x.com` can never become two separate accounts. Exported
@@ -110,7 +118,7 @@ export const loginWithPassword = async (input: {
   email: string
   password: string
   context?: SessionContext
-}): Promise<AuthResult> => {
+}): Promise<PasswordLoginResult> => {
   const email = normalizeEmail(input.email)
 
   // Scope the lookup to the PASSWORD identity, not the user. A Google-only account has no password
@@ -131,13 +139,21 @@ export const loginWithPassword = async (input: {
     return invalidCredentials()
   }
 
-  // A brand-new session id on every login is session-fixation defense for free: we never adopt an
-  // id the client already holds, so a value an attacker planted pre-login can't survive into the
-  // authenticated session.
+  // Password is correct. If this user has a passkey, stop here — the caller must run the second
+  // factor before any session exists. We hand back ONLY the userId (no session), which the caller
+  // stashes server-side as a pending-MFA token. Reached only past a correct password, so it leaks
+  // nothing an attacker didn't already have.
+  if (await hasEnrolledPasskey(account.userId)) {
+    return { status: 'mfa_required', userId: account.userId }
+  }
+
+  // No second factor: a brand-new session id on every login is session-fixation defense for free —
+  // we never adopt an id the client already holds, so a value an attacker planted pre-login can't
+  // survive into the authenticated session.
   const session = await createSession({ userId: account.userId, ...input.context })
   const [user] = await db.select().from(users).where(eq(users.id, account.userId)).limit(1)
   if (user === undefined) {
     throw new Error('account references a missing user')
   }
-  return { user, session }
+  return { status: 'authenticated', user, session }
 }

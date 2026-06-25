@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
-import { type AuthProviderId, type User, accounts, users } from '../db/schema.ts'
+import { users } from '../db/schema.ts'
 import { env } from '../lib/env.ts'
 import { badRequest, unauthorized } from '../lib/errors.ts'
 import {
@@ -13,17 +13,21 @@ import {
   clearOAuthHandshakeCookies,
   clearOAuthLinkCookie,
   clearSessionCookie,
+  setMfaCookie,
   setOAuthHandshakeCookies,
   setOAuthLinkCookie,
   setSessionCookie,
 } from './cookies.ts'
 import { signInWithGoogle } from './google-auth.ts'
 import { linkGoogleAccount } from './linking.ts'
+import { createPendingMfa } from './mfa.ts'
 import { createGoogleAuthorization, exchangeGoogleCode } from './oauth.ts'
 import { loginWithPassword, signupWithPassword } from './password-auth.ts'
 import { requestPasswordReset, resetPassword } from './password-reset.ts'
 import { AUTH_RATE_LIMITS } from './ratelimit.ts'
+import { getLinkedProviders, parseOrThrow, publicUser } from './route-helpers.ts'
 import { getSessionUser, revokeSession } from './session.ts'
+import { twoFaRoutes } from './twofa-routes.ts'
 import { verifyEmailToken } from './verify.ts'
 
 // The one place the new-password rule lives, so signup and reset can never drift apart.
@@ -58,41 +62,14 @@ const verifyQuery = z.object({
   token: z.string().min(1),
 })
 
-// zod's structured issues collapse into one clean 400 (the first field message) — never a 500 or a
-// leaked stack. Body is `unknown` until it clears the schema, so nothing untyped flows downstream.
-const parseOrThrow = <Output>(schema: z.ZodType<Output>, body: unknown): Output => {
-  const result = schema.safeParse(body)
-  if (!result.success) {
-    const firstIssue = result.error.issues[0]
-    throw badRequest('invalid_input', firstIssue?.message ?? 'Invalid input.')
-  }
-  return result.data
-}
-
-// Which sign-in methods this user has set up. The client uses it to show "Connect Google" only when
-// google isn't already linked — so someone who signed in WITH Google never sees a button offering to
-// connect the very account they just used.
-const getLinkedProviders = async (userId: string): Promise<AuthProviderId[]> => {
-  const rows = await db
-    .select({ provider: accounts.provider })
-    .from(accounts)
-    .where(eq(accounts.userId, userId))
-  return rows.map((row) => row.provider)
-}
-
-// The client never sees the password hash or internal columns — only this safe projection, plus the
-// set of linked providers so the UI can reflect which sign-in methods are connected.
-const publicUser = (user: User, linkedProviders: AuthProviderId[]) => ({
-  id: user.id,
-  email: user.email,
-  emailVerified: user.emailVerified,
-  name: user.name,
-  linkedProviders,
-})
-
 // Registered under the /auth prefix. Encapsulated as its own plugin; it inherits the app's cookie
-// support and error handler from the parent context.
+// support and error handler from the parent context. Shared route helpers (parseOrThrow, publicUser,
+// getLinkedProviders) live in route-helpers.ts so the 2FA plugin reuses the exact same definitions.
 export const authRoutes = async (app: FastifyInstance): Promise<void> => {
+  // The passkey 2FA flow (enroll + the second-factor login + recovery) is its own plugin, mounted at
+  // /auth/2fa. It reuses this context's cookie support, error handler, and rate-limit plugin.
+  await app.register(twoFaRoutes, { prefix: '/2fa' })
+
   app.post('/signup', { config: { rateLimit: AUTH_RATE_LIMITS.signup } }, async (req, reply) => {
     const input = parseOrThrow(signupBody, req.body)
     await signupWithPassword({ email: input.email, password: input.password, name: input.name })
@@ -105,14 +82,21 @@ export const authRoutes = async (app: FastifyInstance): Promise<void> => {
 
   app.post('/login', { config: { rateLimit: AUTH_RATE_LIMITS.login } }, async (req, reply) => {
     const input = parseOrThrow(loginBody, req.body)
-    const { user, session } = await loginWithPassword({
+    const result = await loginWithPassword({
       email: input.email,
       password: input.password,
       context: { ip: req.ip, userAgent: req.headers['user-agent'] },
     })
-    setSessionCookie(reply, session.rawToken, session.expiresAt)
-    const linkedProviders = await getLinkedProviders(user.id)
-    return reply.send({ user: publicUser(user, linkedProviders) })
+    // 2FA user: the password passed but no session is granted yet. Stash a pending-MFA token in the
+    // redline_mfa cookie and tell the client to run the passkey step. Deliberately NO session cookie.
+    if (result.status === 'mfa_required') {
+      const pending = await createPendingMfa({ userId: result.userId })
+      setMfaCookie(reply, pending.rawToken, pending.expiresAt)
+      return reply.send({ mfaRequired: true })
+    }
+    setSessionCookie(reply, result.session.rawToken, result.session.expiresAt)
+    const linkedProviders = await getLinkedProviders(result.user.id)
+    return reply.send({ user: publicUser(result.user, linkedProviders) })
   })
 
   // Forgot password, step 1: email a reset link. Uniform 200 whether or not that email has a password
