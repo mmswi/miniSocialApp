@@ -15,6 +15,13 @@
       "when": 1782309382146,
       "tag": "0001_password_reset",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782313875789,
+      "tag": "0002_webauthn_2fa",
+      "breakpoints": true
     }
   ]
 }

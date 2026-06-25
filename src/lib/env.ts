@@ -27,6 +27,12 @@ const envSchema = z.object({
     .transform((value) => value === 'true'),
   SMTP_USER: z.string().default(''),
   SMTP_PASS: z.string().default(''),
+  // WebAuthn / passkey 2FA. RP_ID is the registrable domain a credential is bound to (must be a
+  // suffix of the browser origin's host); RP_NAME is the human label the OS passkey prompt shows.
+  // The expected origin is APP_URL — the single origin the browser sees (Vite proxy in dev,
+  // same-origin in prod). In production set RP_ID to the public host and APP_URL to https://<host>.
+  RP_ID: z.string().default('localhost'),
+  RP_NAME: z.string().default('redline'),
 })
 
 export type Env = z.infer<typeof envSchema>

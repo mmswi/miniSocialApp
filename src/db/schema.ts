@@ -1,6 +1,8 @@
 import {
+  bigint,
   boolean,
   index,
+  jsonb,
   pgEnum,
   pgTable,
   text,
@@ -110,7 +112,64 @@ export const passwordResetTokens = pgTable(
   (t) => [index('password_reset_user_idx').on(t.userId)],
 )
 
+/*
+ * Two-factor auth — WebAuthn passkeys (Face ID / Touch ID / security keys), 2FA design M1
+ *
+ *   users ──1──<── webauthn_credentials      a user may enroll several passkeys
+ *     └──1──<── recovery_codes               one batch of single-use, lose-your-phone backup codes
+ *
+ * "2FA is on" is DERIVED: count(webauthn_credentials WHERE user_id = ?) > 0 — no boolean flag to
+ * drift. Disabling 2FA deletes a user's credentials + recovery codes. The challenges these flows
+ * sign are ephemeral and live in Redis (like the OAuth state/PKCE handshake), never here.
+ */
+export const webauthnCredentials = pgTable(
+  'webauthn_credentials',
+  {
+    // The credential id the authenticator returns (base64url). Globally unique, so it IS the key —
+    // it's what `allowCredentials` lists at login, not a surrogate uuid wrapping it.
+    id: text('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // base64url COSE public key. Only the PUBLIC half is ever stored; the private key never leaves
+    // the device's secure hardware — that is the whole point of a passkey.
+    publicKey: text('public_key').notNull(),
+    // Signature counter for clone detection. Store whatever the library returns and let it judge:
+    // synced passkeys (iCloud/Google) report 0 forever, so a hand-rolled "must increase" rule would
+    // lock every iPhone out.
+    counter: bigint('counter', { mode: 'number' }).notNull().default(0),
+    // e.g. ['internal','hybrid']; replayed in allowCredentials so the browser hints the right device.
+    transports: jsonb('transports').$type<string[]>(),
+    // 'singleDevice' | 'multiDevice' — whether this is a synced, backup-eligible passkey.
+    deviceType: text('device_type'),
+    backedUp: boolean('backed_up'),
+    // User-facing label ("iPhone 15") so several passkeys are tellable apart on the Security page.
+    name: text('name'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+  },
+  (t) => [index('webauthn_credentials_user_idx').on(t.userId)],
+)
+
+export const recoveryCodes = pgTable(
+  'recovery_codes',
+  {
+    // sha256(rawCode); the raw codes are shown to the user exactly once at enrollment and never
+    // stored. High-entropy and single-use — the same hash-at-rest shape as sessions and email tokens.
+    id: text('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    // NULL = unused. Set (not deleted) when consumed, so the UI can show "N of 10 codes remaining".
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('recovery_codes_user_idx').on(t.userId)],
+)
+
 export type User = typeof users.$inferSelect
 export type NewUser = typeof users.$inferInsert
 export type Account = typeof accounts.$inferSelect
 export type Session = typeof sessions.$inferSelect
+export type WebauthnCredential = typeof webauthnCredentials.$inferSelect
+export type RecoveryCode = typeof recoveryCodes.$inferSelect
