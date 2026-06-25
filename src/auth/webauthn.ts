@@ -10,9 +10,9 @@ import {
   verifyRegistrationResponse,
 } from '@simplewebauthn/server'
 import { isoBase64URL, isoUint8Array } from '@simplewebauthn/server/helpers'
-import { count, eq } from 'drizzle-orm'
+import { and, count, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { type WebauthnCredential, webauthnCredentials } from '../db/schema.ts'
+import { type WebauthnCredential, recoveryCodes, webauthnCredentials } from '../db/schema.ts'
 import { env } from '../lib/env.ts'
 
 /*
@@ -215,14 +215,52 @@ export const getPasskey = async (credentialId: string): Promise<WebauthnCredenti
   return row ?? null
 }
 
-// The login gate: does this user have 2FA on? "2FA enabled" is derived from credential count, so
-// there's no boolean to keep in sync. A COUNT, not a fetch — we only need the yes/no.
-export const hasEnrolledPasskey = async (userId: string): Promise<boolean> => {
+// How many passkeys a user has. The delete path needs the number (to refuse removing the last one),
+// and the login gate is derived from it — so "2FA enabled" stays a count, never a stored boolean.
+export const countPasskeys = async (userId: string): Promise<number> => {
   const [row] = await db
     .select({ total: count() })
     .from(webauthnCredentials)
     .where(eq(webauthnCredentials.userId, userId))
-  return (row?.total ?? 0) > 0
+  return row?.total ?? 0
+}
+
+// The login gate: does this user have 2FA on? Derived from the count, so there's nothing to keep in sync.
+export const hasEnrolledPasskey = async (userId: string): Promise<boolean> =>
+  (await countPasskeys(userId)) > 0
+
+// Rename a passkey. Scoped by userId so one user can't relabel another's; returns whether a row matched.
+export const renamePasskey = async (
+  userId: string,
+  credentialId: string,
+  name: string,
+): Promise<boolean> => {
+  const updated = await db
+    .update(webauthnCredentials)
+    .set({ name })
+    .where(and(eq(webauthnCredentials.id, credentialId), eq(webauthnCredentials.userId, userId)))
+    .returning({ id: webauthnCredentials.id })
+  return updated.length > 0
+}
+
+// Remove one passkey. Scoped by userId, so a credential id alone can't delete someone else's key;
+// returns whether a row actually matched (false ⇒ unknown id or not this user's).
+export const deletePasskey = async (userId: string, credentialId: string): Promise<boolean> => {
+  const removed = await db
+    .delete(webauthnCredentials)
+    .where(and(eq(webauthnCredentials.id, credentialId), eq(webauthnCredentials.userId, userId)))
+    .returning({ id: webauthnCredentials.id })
+  return removed.length > 0
+}
+
+// Turn 2FA off entirely. Removes BOTH the passkeys AND their now-orphaned recovery codes, in one
+// transaction, so the account can never be left half-disabled (keys gone but stale codes live, or the
+// reverse). Gated behind a fresh-factor step-up at the route — this function trusts its caller.
+export const disableTwoFactor = async (userId: string): Promise<void> => {
+  await db.transaction(async (tx) => {
+    await tx.delete(webauthnCredentials).where(eq(webauthnCredentials.userId, userId))
+    await tx.delete(recoveryCodes).where(eq(recoveryCodes.userId, userId))
+  })
 }
 
 // After a successful assertion: store the authenticator's new counter and stamp last-used. The

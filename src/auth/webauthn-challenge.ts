@@ -27,3 +27,15 @@ export const storeRegistrationChallenge = async (
 // stale challenge can't linger. Null if it was never issued or already taken/expired.
 export const takeRegistrationChallenge = (userId: string): Promise<string | null> =>
   redis.getdel(registrationChallengeKey(userId))
+
+// Step-up (M6): proving a fresh factor before a destructive action (disable 2FA / remove last passkey).
+// Keyed by sessionId — the user is signed in, and tying the challenge to THIS session stops a challenge
+// minted for one session from being redeemed by another.
+const stepUpChallengeKey = (sessionId: string): string => `webauthn:challenge:stepup:${sessionId}`
+
+export const storeStepUpChallenge = async (sessionId: string, challenge: string): Promise<void> => {
+  await redis.set(stepUpChallengeKey(sessionId), challenge, 'EX', CHALLENGE_TTL_SECONDS)
+}
+
+export const takeStepUpChallenge = (sessionId: string): Promise<string | null> =>
+  redis.getdel(stepUpChallengeKey(sessionId))
