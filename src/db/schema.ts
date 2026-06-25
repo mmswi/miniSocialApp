@@ -156,8 +156,10 @@ export const webauthnCredentials = pgTable(
 export const recoveryCodes = pgTable(
   'recovery_codes',
   {
-    // sha256(rawCode); the raw codes are shown to the user exactly once at enrollment and never
-    // stored. High-entropy and single-use — the same hash-at-rest shape as sessions and email tokens.
+    // sha256(`${userId}:${code}`); the raw codes are shown to the user exactly once at enrollment and
+    // never stored. Salting with the userId scopes the hash per user — two users can never collide on
+    // this PK, and a leaked row reveals nothing without also knowing whose code it is. High-entropy and
+    // single-use, the same hash-at-rest shape as sessions and the email tokens.
     id: text('id').primaryKey(),
     userId: uuid('user_id')
       .notNull()
