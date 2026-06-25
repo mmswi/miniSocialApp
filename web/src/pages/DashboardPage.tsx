@@ -1,4 +1,4 @@
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
 import { Button } from '../components/Button'
 import { CLIENT_AUTH_PROVIDERS } from '../lib/api'
@@ -66,6 +66,12 @@ export const DashboardPage = () => {
               Connect Google account
             </Button>
           )}
+          <Link
+            to="/security"
+            className="block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50"
+          >
+            Two-factor authentication
+          </Link>
           <Button type="button" onClick={onSignOut}>
             Log out
           </Button>

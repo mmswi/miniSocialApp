@@ -5,6 +5,7 @@ import { DashboardPage } from './pages/DashboardPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { LoginPage } from './pages/LoginPage'
 import { ResetPasswordPage } from './pages/ResetPasswordPage'
+import { SecurityPage } from './pages/SecurityPage'
 import { SignupPage } from './pages/SignupPage'
 import { TwoFactorPage } from './pages/TwoFactorPage'
 
@@ -23,6 +24,14 @@ export const App = () => (
           element={
             <RequireAuth>
               <DashboardPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/security"
+          element={
+            <RequireAuth>
+              <SecurityPage />
             </RequireAuth>
           }
         />

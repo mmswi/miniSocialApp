@@ -1,6 +1,8 @@
 import type {
   AuthenticationResponseJSON,
+  PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
+  RegistrationResponseJSON,
 } from '@simplewebauthn/browser'
 
 // The sign-in methods the API reports in `linkedProviders`. The frontend's OWN copy of the backend's
@@ -113,3 +115,49 @@ export const API_2faRecoveryVerify = (
   code: string,
 ): Promise<{ user: PublicUser; recoveryCodesRemaining: number }> =>
   request('/auth/2fa/recovery/verify', { method: 'POST', body: JSON.stringify({ code }) })
+
+// --- two-factor management (the Security page; all behind a live session) ---
+
+// A passkey as the Security page sees it — the server's safe projection, no key material. Dates arrive
+// as ISO strings over JSON.
+export type Passkey = {
+  id: string
+  name: string | null
+  backedUp: boolean | null
+  createdAt: string
+  lastUsedAt: string | null
+}
+
+export const API_2faRegisterOptions = (): Promise<PublicKeyCredentialCreationOptionsJSON> =>
+  request('/auth/2fa/register/options', { method: 'POST' })
+
+// On the FIRST passkey the server returns recoveryCodes — shown to the user exactly once.
+export const API_2faRegisterVerify = (input: {
+  response: RegistrationResponseJSON
+  name?: string
+}): Promise<{ credentialId: string; recoveryCodes?: string[] }> =>
+  request('/auth/2fa/register/verify', { method: 'POST', body: JSON.stringify(input) })
+
+export const API_2faListCredentials = (): Promise<{
+  credentials: Passkey[]
+  recoveryCodesRemaining: number
+}> => request('/auth/2fa/credentials')
+
+export const API_2faRenameCredential = (
+  id: string,
+  name: string,
+): Promise<{ id: string; name: string }> =>
+  request(`/auth/2fa/credentials/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) })
+
+export const API_2faDeleteCredential = (id: string): Promise<{ id: string; removed: true }> =>
+  request(`/auth/2fa/credentials/${id}`, { method: 'DELETE' })
+
+// Step-up: the challenge for proving a fresh passkey before disabling 2FA.
+export const API_2faStepUpOptions = (): Promise<PublicKeyCredentialRequestOptionsJSON> =>
+  request('/auth/2fa/stepup/options', { method: 'POST' })
+
+// Turning 2FA off needs a fresh factor — a step-up passkey assertion or a recovery code.
+export const API_2faDisable = (
+  proof: { assertion: AuthenticationResponseJSON } | { recoveryCode: string },
+): Promise<{ disabled: true }> =>
+  request('/auth/2fa/disable', { method: 'POST', body: JSON.stringify(proof) })
