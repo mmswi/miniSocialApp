@@ -82,7 +82,8 @@ const requirePendingMfa = async (
   rawToken: string | undefined,
 ): Promise<{ rawToken: string; userId: string; challenge: string | null }> => {
   const pending = rawToken === undefined ? null : await loadPendingMfa(rawToken)
-  if (rawToken === undefined || pending === null) {
+  const hasPendingLogin = rawToken !== undefined && pending !== null
+  if (!hasPendingLogin) {
     throw unauthorized('mfa_not_pending', 'Your sign-in expired. Start again.')
   }
   return { rawToken, userId: pending.userId, challenge: pending.challenge }
@@ -135,7 +136,8 @@ const proveFreshFactor = async (input: {
     return false
   }
   const credential = await getPasskey(input.proof.assertion.id)
-  if (credential === null || credential.userId !== input.userId) {
+  const isOwnedByUser = credential !== null && credential.userId === input.userId
+  if (!isOwnedByUser) {
     return false
   }
   const verified = await verifyPasskeyAuthentication({
@@ -223,10 +225,12 @@ export const twoFaRoutes = async (app: FastifyInstance): Promise<void> => {
       }
       const body = parseOrThrow(authenticateVerifyBody, req.body)
 
-      // The asserted credential must belong to THIS pending user. Looking it up and checking ownership
-      // stops a valid assertion for someone else's key from satisfying this account.
+      // The asserted credential must belong to THIS pending user — a valid assertion for someone else's
+      // key must not satisfy this account. Unknown id and wrong-owner share one error on purpose, so the
+      // response never reveals whether that credential id exists for another user.
       const credential = await getPasskey(body.response.id)
-      if (credential === null || credential.userId !== pending.userId) {
+      const isOwnedByPendingUser = credential !== null && credential.userId === pending.userId
+      if (!isOwnedByPendingUser) {
         throw badRequest('webauthn_unknown_credential', 'That passkey is not registered here.')
       }
 
