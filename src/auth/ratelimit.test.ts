@@ -48,6 +48,28 @@ describe('auth rate limiting', () => {
     expect(last?.json<{ error: string }>().error).toBe('rate_limited')
   })
 
+  test('a nested /auth/2fa route is rate-limited too — the limit binds on the grandchild plugin', async () => {
+    // The 2FA routes live in a plugin nested under authRoutes (itself under /auth), so the limiter has
+    // to reach a grandchild. With no mfa cookie each handled request is a 401; the limiter's onRequest
+    // hook trips before the handler on the one past the limit, proving config.rateLimit is applied here.
+    const remoteAddress = freshIp()
+    const limit = AUTH_RATE_LIMITS.twoFactorRecovery.max
+
+    const statuses: number[] = []
+    for (let i = 0; i < limit + 1; i++) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/auth/2fa/recovery/verify',
+        payload: { code: 'x' },
+        remoteAddress,
+      })
+      statuses.push(res.statusCode)
+    }
+
+    expect(statuses.slice(0, limit).every((status) => status === 401)).toBe(true)
+    expect(statuses[limit]).toBe(429)
+  })
+
   test('a separate IP is unaffected by another IP hitting its limit', async () => {
     const limit = AUTH_RATE_LIMITS.verify.max
     const attacker = freshIp()
