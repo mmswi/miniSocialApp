@@ -1,3 +1,4 @@
+import type { AuthenticatorTransportFuture } from '@simplewebauthn/server'
 import {
   bigint,
   boolean,
@@ -139,7 +140,8 @@ export const webauthnCredentials = pgTable(
     // lock every iPhone out.
     counter: bigint('counter', { mode: 'number' }).notNull().default(0),
     // e.g. ['internal','hybrid']; replayed in allowCredentials so the browser hints the right device.
-    transports: jsonb('transports').$type<string[]>(),
+    // Typed as the library's transport union (not bare string[]) so it round-trips with no cast.
+    transports: jsonb('transports').$type<AuthenticatorTransportFuture[]>(),
     // 'singleDevice' | 'multiDevice' — whether this is a synced, backup-eligible passkey.
     deviceType: text('device_type'),
     backedUp: boolean('backed_up'),
