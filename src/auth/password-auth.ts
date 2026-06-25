@@ -15,13 +15,20 @@ import { hasEnrolledPasskey } from './webauthn.ts'
 type CreatedSession = { rawToken: string; expiresAt: Date }
 type SessionContext = { ip?: string; userAgent?: string }
 
-// A correct password is necessary but, for a 2FA user, not sufficient. So login has two outcomes:
-// fully authenticated (a session is minted), or "password OK, now prove the second factor" — in which
-// case NO session is created and the caller starts the passkey step. mfa_required is only ever
-// returned AFTER a correct password, so it can't become an oracle for whether an email has 2FA.
+// The two outcomes of a correct password — named once, so call sites read the intent and never a bare
+// 'mfa_required' string. The result type's discriminant derives from these (same pattern as
+// AUTH_PROVIDERS). `mfaRequired` means "password OK, now prove the second factor": NO session yet.
+export const PASSWORD_LOGIN_STATUS = {
+  authenticated: 'authenticated',
+  mfaRequired: 'mfa_required',
+} as const
+
+// A correct password is necessary but, for a 2FA user, not sufficient — hence two outcomes. The
+// mfaRequired branch is only ever reached AFTER a correct password, so it can't become an oracle for
+// whether an email has 2FA.
 export type PasswordLoginResult =
-  | { status: 'authenticated'; user: User; session: CreatedSession }
-  | { status: 'mfa_required'; userId: string }
+  | { status: typeof PASSWORD_LOGIN_STATUS.authenticated; user: User; session: CreatedSession }
+  | { status: typeof PASSWORD_LOGIN_STATUS.mfaRequired; userId: string }
 
 // Emails are matched case-insensitively: we store and look them up in one canonical (trimmed,
 // lowercased) form, so `Mara@x.com` and `mara@x.com` can never become two separate accounts. Exported
@@ -144,7 +151,7 @@ export const loginWithPassword = async (input: {
   // stashes server-side as a pending-MFA token. Reached only past a correct password, so it leaks
   // nothing an attacker didn't already have.
   if (await hasEnrolledPasskey(account.userId)) {
-    return { status: 'mfa_required', userId: account.userId }
+    return { status: PASSWORD_LOGIN_STATUS.mfaRequired, userId: account.userId }
   }
 
   // No second factor: a brand-new session id on every login is session-fixation defense for free —
@@ -155,5 +162,5 @@ export const loginWithPassword = async (input: {
   if (user === undefined) {
     throw new Error('account references a missing user')
   }
-  return { status: 'authenticated', user, session }
+  return { status: PASSWORD_LOGIN_STATUS.authenticated, user, session }
 }

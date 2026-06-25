@@ -22,7 +22,7 @@ import { signInWithGoogle } from './google-auth.ts'
 import { linkGoogleAccount } from './linking.ts'
 import { createPendingMfa } from './mfa.ts'
 import { createGoogleAuthorization, exchangeGoogleCode } from './oauth.ts'
-import { loginWithPassword, signupWithPassword } from './password-auth.ts'
+import { PASSWORD_LOGIN_STATUS, loginWithPassword, signupWithPassword } from './password-auth.ts'
 import { requestPasswordReset, resetPassword } from './password-reset.ts'
 import { AUTH_RATE_LIMITS } from './ratelimit.ts'
 import { getLinkedProviders, parseOrThrow, publicUser } from './route-helpers.ts'
@@ -89,7 +89,7 @@ export const authRoutes = async (app: FastifyInstance): Promise<void> => {
     })
     // 2FA user: the password passed but no session is granted yet. Stash a pending-MFA token in the
     // redline_mfa cookie and tell the client to run the passkey step. Deliberately NO session cookie.
-    if (result.status === 'mfa_required') {
+    if (result.status === PASSWORD_LOGIN_STATUS.mfaRequired) {
       const pending = await createPendingMfa({ userId: result.userId })
       setMfaCookie(reply, pending.rawToken, pending.expiresAt)
       return reply.send({ mfaRequired: true })
