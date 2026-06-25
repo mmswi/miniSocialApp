@@ -23,7 +23,13 @@ export const LoginPage = () => {
     setError(null)
     setPending(true)
     try {
-      await API_login({ email, password })
+      const result = await API_login({ email, password })
+      // A 2FA account needs the second factor before any session exists — head to /2fa, where the
+      // pending-MFA cookie (already set) gates the passkey step.
+      if ('mfaRequired' in result) {
+        navigate('/2fa')
+        return
+      }
       // Re-pull /auth/me so the app knows we're authenticated, then land on the dashboard.
       await refresh()
       navigate('/')

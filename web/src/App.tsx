@@ -6,12 +6,15 @@ import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { LoginPage } from './pages/LoginPage'
 import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { SignupPage } from './pages/SignupPage'
+import { TwoFactorPage } from './pages/TwoFactorPage'
 
 export const App = () => (
   <AuthProvider>
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        {/* Public-ish: the server-side pending-MFA cookie (set at /login) is what actually gates it. */}
+        <Route path="/2fa" element={<TwoFactorPage />} />
         <Route path="/signup" element={<SignupPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />

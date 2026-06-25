@@ -1,3 +1,8 @@
+import type {
+  AuthenticationResponseJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+} from '@simplewebauthn/browser'
+
 // The sign-in methods the API reports in `linkedProviders`. The frontend's OWN copy of the backend's
 // auth_provider enum, kept deliberately separate: importing the server's AUTH_PROVIDERS from
 // db/schema.ts would drag drizzle-orm into the client bundle. The CLIENT_ prefix marks these as
@@ -71,10 +76,12 @@ export const API_signup = (input: {
 }): Promise<{ message: string }> =>
   request('/auth/signup', { method: 'POST', body: JSON.stringify(input) })
 
-export const API_login = (input: {
-  email: string
-  password: string
-}): Promise<{ user: PublicUser }> =>
+// Login has two outcomes now: a session (a user comes back), or "second factor required" for a 2FA
+// account — then the client runs the passkey step at /2fa. The pending-MFA cookie is set server-side,
+// so the only thing the client learns here is which branch it's on.
+export type LoginResult = { user: PublicUser } | { mfaRequired: true }
+
+export const API_login = (input: { email: string; password: string }): Promise<LoginResult> =>
   request('/auth/login', { method: 'POST', body: JSON.stringify(input) })
 
 export const API_logout = (): Promise<null> => request('/auth/logout', { method: 'POST' })
@@ -87,3 +94,22 @@ export const API_resetPassword = (input: {
   password: string
 }): Promise<{ message: string }> =>
   request('/auth/reset-password', { method: 'POST', body: JSON.stringify(input) })
+
+// --- two-factor (passkey) login ---
+// The challenge/response handshake. The page calls options, hands the JSON to the browser's
+// startAuthentication (which triggers Face ID), then posts the assertion back to verify. All three
+// ride the httpOnly redline_mfa cookie set at /login — the client never handles the pending token.
+
+export const API_2faAuthenticateOptions = (): Promise<PublicKeyCredentialRequestOptionsJSON> =>
+  request('/auth/2fa/authenticate/options', { method: 'POST' })
+
+export const API_2faAuthenticateVerify = (
+  response: AuthenticationResponseJSON,
+): Promise<{ user: PublicUser }> =>
+  request('/auth/2fa/authenticate/verify', { method: 'POST', body: JSON.stringify({ response }) })
+
+// The lose-your-phone path: a recovery code instead of a passkey. Returns how many codes are left.
+export const API_2faRecoveryVerify = (
+  code: string,
+): Promise<{ user: PublicUser; recoveryCodesRemaining: number }> =>
+  request('/auth/2fa/recovery/verify', { method: 'POST', body: JSON.stringify({ code }) })
