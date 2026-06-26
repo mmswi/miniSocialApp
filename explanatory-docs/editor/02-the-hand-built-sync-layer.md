@@ -45,7 +45,7 @@ You could try to merge the two copies with a diff algorithm. People do. It is a 
 
 So we do not send copies of the text at all.
 
-We use a CRDT.
+We use a **CRDT (Conflict-free Replicated Data Type)**.
 
 A CRDT is a data structure where concurrent edits merge deterministically.
 

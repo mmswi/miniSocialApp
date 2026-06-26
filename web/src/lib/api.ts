@@ -176,6 +176,11 @@ export type DocumentMeta = {
 
 export const API_listDocuments = (): Promise<{ documents: DocumentMeta[] }> => request('/documents')
 
+// One document's metadata (for the editor header). A 404 (not yours / unknown) surfaces as an ApiError
+// with status 404 — the editor page shows a not-found state rather than opening a blank doc.
+export const API_getDocument = (id: string): Promise<{ document: DocumentMeta }> =>
+  request(`/documents/${id}`)
+
 // No title sends `{}`, so the server applies its default ('Untitled document').
 export const API_createDocument = (
   input: { title?: string } = {},

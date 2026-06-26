@@ -47,8 +47,8 @@ export const DashboardPage = () => {
     setIsCreating(true)
     try {
       const { document } = await API_createDocument()
-      // Prepend — the list is newest-first and this one is the newest. (The editor opens in M3.)
-      setDocuments((current) => [document, ...current])
+      // Straight into the editor on the new (empty) document — that's where you actually start.
+      navigate(`/editor/${document.id}`)
     } finally {
       setIsCreating(false)
     }
@@ -123,12 +123,12 @@ export const DashboardPage = () => {
             <ul className="divide-y divide-slate-100">
               {documents.map((document) => (
                 <li key={document.id} className="flex items-center justify-between py-3">
-                  <div>
-                    <p className="font-medium">{document.title}</p>
+                  <Link to={`/editor/${document.id}`} className="group">
+                    <p className="font-medium group-hover:underline">{document.title}</p>
                     <p className="text-xs text-slate-500">
                       Edited {formatLastEdited(document.updatedAt)}
                     </p>
-                  </div>
+                  </Link>
                   <button
                     type="button"
                     onClick={() => void onDeleteDocument(document.id)}

@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { AuthProvider } from '../auth/AuthProvider'
 import { DashboardPage } from './DashboardPage'
@@ -72,11 +72,21 @@ describe('DashboardPage', () => {
     expect(await screen.findByText(/No documents yet/)).toBeInTheDocument()
   })
 
-  test('creating a document adds it to the list', async () => {
+  test('creating a document opens its editor', async () => {
     stubApi({ list: [], created: doc('doc-new', 'Untitled document') })
-    renderDashboard()
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <AuthProvider>
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/editor/:id" element={<div>Editor open</div>} />
+          </Routes>
+        </AuthProvider>
+      </MemoryRouter>,
+    )
     await screen.findByText(/No documents yet/)
     await userEvent.click(screen.getByRole('button', { name: 'New document' }))
-    expect(await screen.findByText('Untitled document')).toBeInTheDocument()
+    // The new (empty) doc opens straight in the editor — navigation to /documents/doc-new.
+    expect(await screen.findByText('Editor open')).toBeInTheDocument()
   })
 })
