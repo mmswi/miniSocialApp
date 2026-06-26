@@ -1,0 +1,4 @@
+[test]
+# Runs once before the suite. Registers the single global afterAll that closes the Postgres pool and
+# Redis connection — see test/setup.ts for why per-file teardown is wrong under bun's shared process.
+preload = ["./test/setup.ts"]

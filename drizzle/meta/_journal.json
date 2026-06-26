@@ -6,7 +6,21 @@
       "idx": 0,
       "version": "7",
       "when": 1782142477953,
-      "tag": "0000_luxuriant_tigra",
+      "tag": "0000_initial_auth_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1782309382146,
+      "tag": "0001_password_reset",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782313875789,
+      "tag": "0002_webauthn_2fa",
       "breakpoints": true
     }
   ]

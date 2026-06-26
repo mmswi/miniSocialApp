@@ -1,8 +1,13 @@
-import { z } from 'zod';
+import { z } from 'zod'
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  // Set to the trusted proxy/load-balancer address or CIDR block (Classless Inter-Domain Routing —
+  // an IP range like 10.0.0.0/8) in production so req.ip is the real client (per-IP rate limiting
+  // depends on it). Empty = trust no proxy. NEVER set a value that blindly trusts client-supplied
+  // X-Forwarded-For — that lets an attacker spoof a fresh IP per request and walk past the limiter.
+  TRUST_PROXY: z.string().default(''),
   COOKIE_SECRET: z.string().min(16),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
@@ -11,15 +16,32 @@ const envSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().default(''),
   GOOGLE_REDIRECT_URI: z.string().url().default('http://localhost:3000/auth/google/callback'),
   EMAIL_FROM: z.string().default('noreply@localhost'),
-});
+  // SMTP transport for outbound mail. Defaults target the local Mailpit container (docker-compose);
+  // in production these point at a real provider (Resend/SES). SMTP_SECURE is parsed from an explicit
+  // 'true'/'false' string — z.coerce.boolean() would read the string 'false' as truthy (a classic trap).
+  SMTP_HOST: z.string().default('localhost'),
+  SMTP_PORT: z.coerce.number().default(1025),
+  SMTP_SECURE: z
+    .string()
+    .default('false')
+    .transform((value) => value === 'true'),
+  SMTP_USER: z.string().default(''),
+  SMTP_PASS: z.string().default(''),
+  // WebAuthn / passkey 2FA. RP_ID is the registrable domain a credential is bound to (must be a
+  // suffix of the browser origin's host); RP_NAME is the human label the OS passkey prompt shows.
+  // The expected origin is APP_URL — the single origin the browser sees (Vite proxy in dev,
+  // same-origin in prod). In production set RP_ID to the public host and APP_URL to https://<host>.
+  RP_ID: z.string().default('localhost'),
+  RP_NAME: z.string().default('redline'),
+})
 
-export type Env = z.infer<typeof envSchema>;
+export type Env = z.infer<typeof envSchema>
 
 // Parse explicitly — handy in tests that want to feed a custom source. Throws with field-level
 // detail if a required var is missing or malformed, so failures surface loudly, not at first use.
 export const loadEnv = (source: Record<string, string | undefined> = process.env): Env =>
-  envSchema.parse(source);
+  envSchema.parse(source)
 
 // The process-wide config singleton. Pure data (no connection), so it needs no globalThis guard —
 // just parse once at import. A missing/invalid var throws here, failing the process at boot.
-export const env: Env = loadEnv();
+export const env: Env = loadEnv()

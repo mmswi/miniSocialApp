@@ -13,7 +13,8 @@
     "noUncheckedIndexedAccess": true,
     "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "types": ["bun"]
   },
-  "include": ["src", "*.ts"]
+  "include": ["src", "test", "*.ts"]
 }
