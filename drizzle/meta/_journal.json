@@ -22,6 +22,13 @@
       "when": 1782313875789,
       "tag": "0002_webauthn_2fa",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1782461618540,
+      "tag": "0003_documents",
+      "breakpoints": true
     }
   ]
 }

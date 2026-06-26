@@ -6,6 +6,7 @@ import Fastify from 'fastify'
 import { authRateLimitOptions } from './auth/ratelimit.ts'
 import { authRoutes } from './auth/routes.ts'
 import { db } from './db/client.ts'
+import { documentRoutes } from './documents/routes.ts'
 import { env } from './lib/env.ts'
 import { AppError } from './lib/errors.ts'
 import { redis } from './lib/redis.ts'
@@ -64,6 +65,10 @@ export const buildServer = (options: BuildServerOptions = {}): FastifyInstance =
 
   // Auth endpoints live under /auth — signup, login, logout, and the session check (/me).
   app.register(authRoutes, { prefix: '/auth' })
+
+  // Document CRUD lives under /documents — owner-scoped list/create/get/delete. The realtime editing
+  // of a document's contents is the ws sync layer (step 2 M2), not these REST routes.
+  app.register(documentRoutes, { prefix: '/documents' })
 
   return app
 }

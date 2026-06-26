@@ -1,7 +1,9 @@
 import type { AuthenticatorTransportFuture } from '@simplewebauthn/server'
 import {
   bigint,
+  bigserial,
   boolean,
+  customType,
   index,
   jsonb,
   pgEnum,
@@ -171,9 +173,76 @@ export const recoveryCodes = pgTable(
   (t) => [index('recovery_codes_user_idx').on(t.userId)],
 )
 
+/*
+ * Documents + two-tier persistence (step 2 — the multiplayer editor)
+ *
+ *   users ──1──<── documents ──1──<── document_updates   (append-only Yjs update log)
+ *
+ * A document's live state lives in a CRDT (Y.Doc). We persist it two ways at once:
+ *   • every Yjs update is APPENDED to document_updates the instant the sync server receives it —
+ *     durable immediately, no "process died before the debounced flush" data-loss window;
+ *   • a single worker periodically COMPACTS the log into documents.snapshot and trims the folded
+ *     rows (step 2 M4). Loading a doc = snapshot + replay of every update with seq > snapshotThrough.
+ * Appends are commutative, so many sync instances can append concurrently with no leader election;
+ * only the lone compactor writes the snapshot, so there is no last-writer-wins snapshot race.
+ *
+ * Owner-only for now — teams + the reviewer/editor role matrix arrive at step 4.
+ */
+
+// Postgres bytea <-> Uint8Array. Yjs speaks Uint8Array; the postgres-js driver speaks Buffer, so we
+// normalize at this one seam: app code never handles a Buffer, the driver never sees a bare Uint8Array.
+const bytea = customType<{ data: Uint8Array; driverData: Buffer }>({
+  dataType: () => 'bytea',
+  toDriver: (value) => Buffer.from(value),
+  fromDriver: (value) => new Uint8Array(value),
+})
+
+export const documents = pgTable(
+  'documents',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    title: text('title').notNull().default('Untitled document'),
+    // Compacted Y.Doc state (Y.encodeStateAsUpdate). NULL until the first compaction — a brand-new doc
+    // is reconstructed purely from its update log. Loading = this snapshot + replay of newer updates.
+    snapshot: bytea('snapshot'),
+    // The document_updates.seq this snapshot already folds in. The compactor sets it, then deletes the
+    // folded rows; load replays only rows with seq > snapshotThrough, so nothing is applied twice.
+    snapshotThrough: bigint('snapshot_through', { mode: 'number' }).notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('documents_owner_idx').on(t.ownerId)],
+)
+
+export const documentUpdates = pgTable(
+  'document_updates',
+  {
+    // bigserial — the append order IS the replay order. Yjs updates are commutative so order can't
+    // corrupt state, but a stable total order keeps replay deterministic and lets the compactor say
+    // "snapshot includes through seq N" with a single watermark.
+    seq: bigserial('seq', { mode: 'number' }).primaryKey(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'cascade' }),
+    // One Yjs update (the encoded diff of a single transaction), appended the instant it arrives.
+    update: bytea('update').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  // Composite (documentId, seq): load and compaction both scan one doc's rows in seq order.
+  (t) => [index('document_updates_doc_seq_idx').on(t.documentId, t.seq)],
+)
+
 export type User = typeof users.$inferSelect
 export type NewUser = typeof users.$inferInsert
 export type Account = typeof accounts.$inferSelect
 export type Session = typeof sessions.$inferSelect
 export type WebauthnCredential = typeof webauthnCredentials.$inferSelect
 export type RecoveryCode = typeof recoveryCodes.$inferSelect
+// DocumentRow, not Document: the DOM already owns `Document` on the client, and this type's twin
+// crosses to web/. A distinct name keeps the two from ever colliding or auto-importing wrong.
+export type DocumentRow = typeof documents.$inferSelect
+export type NewDocumentRow = typeof documents.$inferInsert
+export type DocumentUpdateRow = typeof documentUpdates.$inferSelect

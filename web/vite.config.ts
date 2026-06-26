@@ -14,6 +14,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/auth': 'http://localhost:3001',
+      '/documents': 'http://localhost:3001',
       '/health': 'http://localhost:3001',
       '/ready': 'http://localhost:3001',
     },
