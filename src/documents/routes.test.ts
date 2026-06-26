@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { inArray } from 'drizzle-orm'
 import { SESSION_COOKIE_NAME } from '../auth/cookies.ts'
 import { db } from '../db/client.ts'
-import { users } from '../db/schema.ts'
+import { usersTable } from '../db/schema.ts'
 import { buildServer } from '../server.ts'
 
 // Integration tests against the real /documents routes through Fastify's in-process inject. Signup is
@@ -46,7 +46,7 @@ const authCookie = (token: string): { cookie: string } => ({
 
 afterAll(async () => {
   if (createdEmails.length > 0) {
-    await db.delete(users).where(inArray(users.email, createdEmails))
+    await db.delete(usersTable).where(inArray(usersTable.email, createdEmails))
   }
   await app.close()
 })

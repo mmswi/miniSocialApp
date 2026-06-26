@@ -8,7 +8,7 @@ import * as Y from 'yjs'
 import { SESSION_COOKIE_NAME } from '../auth/cookies.ts'
 import { createSession } from '../auth/session.ts'
 import { db } from '../db/client.ts'
-import { documents, users } from '../db/schema.ts'
+import { documentsTable, usersTable } from '../db/schema.ts'
 import { buildServer } from '../server.ts'
 import { loadDoc } from './doc-store.ts'
 import { SYNC_MESSAGE } from './sync-protocol.ts'
@@ -28,7 +28,7 @@ const SHARED_TEXT = 'content'
 const seedUser = async (prefix: string): Promise<{ id: string; cookie: string }> => {
   const email = `${prefix}-${randomUUID()}@example.test`
   createdEmails.push(email)
-  const [user] = await db.insert(users).values({ email }).returning()
+  const [user] = await db.insert(usersTable).values({ email }).returning()
   if (user === undefined) {
     throw new Error('failed to seed user')
   }
@@ -38,7 +38,7 @@ const seedUser = async (prefix: string): Promise<{ id: string; cookie: string }>
 
 // A fresh, empty document owned by the owner — one per test, so state never bleeds between them.
 const freshDocument = async (): Promise<string> => {
-  const [doc] = await db.insert(documents).values({ ownerId, title: 'sync test' }).returning()
+  const [doc] = await db.insert(documentsTable).values({ ownerId, title: 'sync test' }).returning()
   if (doc === undefined) {
     throw new Error('failed to seed document')
   }
@@ -175,7 +175,7 @@ afterAll(async () => {
   app.server.closeAllConnections()
   await app.close()
   if (createdEmails.length > 0) {
-    await db.delete(users).where(inArray(users.email, createdEmails))
+    await db.delete(usersTable).where(inArray(usersTable.email, createdEmails))
   }
 })
 

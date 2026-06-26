@@ -12,7 +12,11 @@ import {
 import { isoBase64URL, isoUint8Array } from '@simplewebauthn/server/helpers'
 import { and, count, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { type WebauthnCredential, recoveryCodes, webauthnCredentials } from '../db/schema.ts'
+import {
+  type WebauthnCredentialRow,
+  recoveryCodesTable,
+  webauthnCredentialsTable,
+} from '../db/schema.ts'
 import { env } from '../lib/env.ts'
 
 /*
@@ -172,7 +176,7 @@ type StoredPasskeyCredential = {
 
 // Adapts a persisted row into the credential shape the verify step consumes (column `id` ➜ field
 // `credentialId`), so callers never reach into row internals.
-export const toStoredPasskeyCredential = (row: WebauthnCredential): StoredPasskeyCredential => ({
+export const toStoredPasskeyCredential = (row: WebauthnCredentialRow): StoredPasskeyCredential => ({
   credentialId: row.id,
   publicKey: row.publicKey,
   counter: row.counter,
@@ -187,7 +191,7 @@ export const storePasskey = async (input: {
   registration: VerifiedPasskeyRegistration
   name: string | null
 }): Promise<void> => {
-  await db.insert(webauthnCredentials).values({
+  await db.insert(webauthnCredentialsTable).values({
     id: input.registration.credentialId,
     userId: input.userId,
     publicKey: input.registration.publicKey,
@@ -201,16 +205,16 @@ export const storePasskey = async (input: {
 
 // Every passkey a user has enrolled — feeds excludeCredentials (enroll), allowCredentials (login),
 // and the Security page list.
-export const listPasskeys = (userId: string): Promise<WebauthnCredential[]> =>
-  db.select().from(webauthnCredentials).where(eq(webauthnCredentials.userId, userId))
+export const listPasskeys = (userId: string): Promise<WebauthnCredentialRow[]> =>
+  db.select().from(webauthnCredentialsTable).where(eq(webauthnCredentialsTable.userId, userId))
 
 // One credential by its id (the value an assertion reports), or null. The login step looks the
 // stored public key up this way to verify the signature against it.
-export const getPasskey = async (credentialId: string): Promise<WebauthnCredential | null> => {
+export const getPasskey = async (credentialId: string): Promise<WebauthnCredentialRow | null> => {
   const [row] = await db
     .select()
-    .from(webauthnCredentials)
-    .where(eq(webauthnCredentials.id, credentialId))
+    .from(webauthnCredentialsTable)
+    .where(eq(webauthnCredentialsTable.id, credentialId))
     .limit(1)
   return row ?? null
 }
@@ -220,8 +224,8 @@ export const getPasskey = async (credentialId: string): Promise<WebauthnCredenti
 export const countPasskeys = async (userId: string): Promise<number> => {
   const [row] = await db
     .select({ total: count() })
-    .from(webauthnCredentials)
-    .where(eq(webauthnCredentials.userId, userId))
+    .from(webauthnCredentialsTable)
+    .where(eq(webauthnCredentialsTable.userId, userId))
   return row?.total ?? 0
 }
 
@@ -236,10 +240,15 @@ export const renamePasskey = async (
   name: string,
 ): Promise<boolean> => {
   const updated = await db
-    .update(webauthnCredentials)
+    .update(webauthnCredentialsTable)
     .set({ name })
-    .where(and(eq(webauthnCredentials.id, credentialId), eq(webauthnCredentials.userId, userId)))
-    .returning({ id: webauthnCredentials.id })
+    .where(
+      and(
+        eq(webauthnCredentialsTable.id, credentialId),
+        eq(webauthnCredentialsTable.userId, userId),
+      ),
+    )
+    .returning({ id: webauthnCredentialsTable.id })
   return updated.length > 0
 }
 
@@ -247,9 +256,14 @@ export const renamePasskey = async (
 // returns whether a row actually matched (false ⇒ unknown id or not this user's).
 export const deletePasskey = async (userId: string, credentialId: string): Promise<boolean> => {
   const removed = await db
-    .delete(webauthnCredentials)
-    .where(and(eq(webauthnCredentials.id, credentialId), eq(webauthnCredentials.userId, userId)))
-    .returning({ id: webauthnCredentials.id })
+    .delete(webauthnCredentialsTable)
+    .where(
+      and(
+        eq(webauthnCredentialsTable.id, credentialId),
+        eq(webauthnCredentialsTable.userId, userId),
+      ),
+    )
+    .returning({ id: webauthnCredentialsTable.id })
   return removed.length > 0
 }
 
@@ -258,8 +272,8 @@ export const deletePasskey = async (userId: string, credentialId: string): Promi
 // reverse). Gated behind a fresh-factor step-up at the route — this function trusts its caller.
 export const disableTwoFactor = async (userId: string): Promise<void> => {
   await db.transaction(async (tx) => {
-    await tx.delete(webauthnCredentials).where(eq(webauthnCredentials.userId, userId))
-    await tx.delete(recoveryCodes).where(eq(recoveryCodes.userId, userId))
+    await tx.delete(webauthnCredentialsTable).where(eq(webauthnCredentialsTable.userId, userId))
+    await tx.delete(recoveryCodesTable).where(eq(recoveryCodesTable.userId, userId))
   })
 }
 
@@ -270,7 +284,7 @@ export const touchPasskeyCounter = async (
   newCounter: number,
 ): Promise<void> => {
   await db
-    .update(webauthnCredentials)
+    .update(webauthnCredentialsTable)
     .set({ counter: newCounter, lastUsedAt: new Date() })
-    .where(eq(webauthnCredentials.id, credentialId))
+    .where(eq(webauthnCredentialsTable.id, credentialId))
 }

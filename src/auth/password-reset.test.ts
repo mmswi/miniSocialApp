@@ -2,7 +2,12 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { AUTH_PROVIDERS, accounts, passwordResetTokens, users } from '../db/schema.ts'
+import {
+  AUTH_PROVIDERS,
+  accountsTable,
+  passwordResetTokensTable,
+  usersTable,
+} from '../db/schema.ts'
 import { sentEmails } from '../lib/email.ts'
 import { buildServer } from '../server.ts'
 import { SESSION_COOKIE_NAME } from './cookies.ts'
@@ -57,7 +62,7 @@ const requireResetToken = (email: string): string => {
 
 afterAll(async () => {
   if (createdEmails.length > 0) {
-    await db.delete(users).where(inArray(users.email, createdEmails))
+    await db.delete(usersTable).where(inArray(usersTable.email, createdEmails))
   }
   await app.close()
 })
@@ -89,11 +94,11 @@ describe('POST /auth/forgot-password', () => {
   test('a Google-only account gets the same 200 and no reset email (password accounts only)', async () => {
     // A user with a google identity and NO password account — the deliberate scope boundary.
     const email = uniqueEmail('forgot-google')
-    const [user] = await db.insert(users).values({ email, emailVerified: true }).returning()
+    const [user] = await db.insert(usersTable).values({ email, emailVerified: true }).returning()
     if (user === undefined) {
       throw new Error('user insert returned no row')
     }
-    await db.insert(accounts).values({
+    await db.insert(accountsTable).values({
       userId: user.id,
       provider: AUTH_PROVIDERS.google,
       providerUid: `google-${randomUUID()}`,
@@ -174,14 +179,14 @@ describe('POST /auth/reset-password', () => {
     await signup(email)
     const [user] = await db
       .select()
-      .from(users)
-      .where(inArray(users.email, [email]))
+      .from(usersTable)
+      .where(inArray(usersTable.email, [email]))
       .limit(1)
     if (user === undefined) {
       throw new Error(`expected a user for ${email}`)
     }
     const rawToken = generateToken()
-    await db.insert(passwordResetTokens).values({
+    await db.insert(passwordResetTokensTable).values({
       id: hashToken(rawToken),
       userId: user.id,
       expiresAt: new Date(Date.now() - 1000),

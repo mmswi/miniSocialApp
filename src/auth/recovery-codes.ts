@@ -1,7 +1,7 @@
 import { randomInt } from 'node:crypto'
 import { and, count, eq, isNull } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { recoveryCodes } from '../db/schema.ts'
+import { recoveryCodesTable } from '../db/schema.ts'
 import { hashToken } from './tokens.ts'
 
 /*
@@ -61,8 +61,8 @@ export const generateRecoveryCodes = async (userId: string): Promise<string[]> =
   }
   const rawCodes = [...codes]
   await db.transaction(async (tx) => {
-    await tx.delete(recoveryCodes).where(eq(recoveryCodes.userId, userId))
-    await tx.insert(recoveryCodes).values(
+    await tx.delete(recoveryCodesTable).where(eq(recoveryCodesTable.userId, userId))
+    await tx.insert(recoveryCodesTable).values(
       rawCodes.map((code) => ({
         id: recoveryCodeId(userId, normalizeRecoveryCode(code)),
         userId,
@@ -78,12 +78,16 @@ export const generateRecoveryCodes = async (userId: string): Promise<string[]> =
 export const consumeRecoveryCode = async (userId: string, rawCode: string): Promise<boolean> => {
   const id = recoveryCodeId(userId, normalizeRecoveryCode(rawCode))
   const consumed = await db
-    .update(recoveryCodes)
+    .update(recoveryCodesTable)
     .set({ usedAt: new Date() })
     .where(
-      and(eq(recoveryCodes.id, id), eq(recoveryCodes.userId, userId), isNull(recoveryCodes.usedAt)),
+      and(
+        eq(recoveryCodesTable.id, id),
+        eq(recoveryCodesTable.userId, userId),
+        isNull(recoveryCodesTable.usedAt),
+      ),
     )
-    .returning({ id: recoveryCodes.id })
+    .returning({ id: recoveryCodesTable.id })
   return consumed.length > 0
 }
 
@@ -91,7 +95,7 @@ export const consumeRecoveryCode = async (userId: string, rawCode: string): Prom
 export const countRemainingRecoveryCodes = async (userId: string): Promise<number> => {
   const [row] = await db
     .select({ total: count() })
-    .from(recoveryCodes)
-    .where(and(eq(recoveryCodes.userId, userId), isNull(recoveryCodes.usedAt)))
+    .from(recoveryCodesTable)
+    .where(and(eq(recoveryCodesTable.userId, userId), isNull(recoveryCodesTable.usedAt)))
   return row?.total ?? 0
 }

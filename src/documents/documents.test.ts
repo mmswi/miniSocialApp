@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { users } from '../db/schema.ts'
+import { usersTable } from '../db/schema.ts'
 import {
   createDocument,
   deleteDocumentForOwner,
@@ -19,7 +19,7 @@ let strangerId = ''
 
 beforeAll(async () => {
   const seeded = await db
-    .insert(users)
+    .insert(usersTable)
     .values([{ email: ownerEmail }, { email: strangerEmail }])
     .returning()
   const owner = seeded.find((u) => u.email === ownerEmail)
@@ -33,7 +33,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   // Deleting the users cascades to their documents, which cascades to the update log.
-  await db.delete(users).where(inArray(users.email, [ownerEmail, strangerEmail]))
+  await db.delete(usersTable).where(inArray(usersTable.email, [ownerEmail, strangerEmail]))
 })
 
 describe('documents data access', () => {
@@ -51,7 +51,7 @@ describe('documents data access', () => {
   test('the list returns only the owner’s documents, newest first', async () => {
     const isolatedOwner = (
       await db
-        .insert(users)
+        .insert(usersTable)
         .values({ email: `doc-iso-${randomUUID()}@example.test` })
         .returning()
     )[0]
@@ -64,7 +64,7 @@ describe('documents data access', () => {
     const listed = await listDocumentsForOwner(isolatedOwner.id)
     expect(listed.map((d) => d.id)).toEqual([second.id, first.id])
 
-    await db.delete(users).where(inArray(users.id, [isolatedOwner.id]))
+    await db.delete(usersTable).where(inArray(usersTable.id, [isolatedOwner.id]))
   })
 
   test('getDocumentForOwner returns the document for its owner', async () => {

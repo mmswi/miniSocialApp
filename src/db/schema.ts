@@ -34,12 +34,12 @@ export const AUTH_PROVIDERS = { password: 'password', google: 'google' } as cons
 // auth-context component on the client, so the provider-id union is `AuthProviderId` everywhere.
 export type AuthProviderId = (typeof AUTH_PROVIDERS)[keyof typeof AUTH_PROVIDERS]
 
-export const authProvider = pgEnum('auth_provider', [
+export const authProviderEnum = pgEnum('auth_provider', [
   AUTH_PROVIDERS.password,
   AUTH_PROVIDERS.google,
 ])
 
-export const users = pgTable(
+export const usersTable = pgTable(
   'users',
   {
     id: uuid('id').defaultRandom().primaryKey(),
@@ -52,14 +52,14 @@ export const users = pgTable(
   (t) => [uniqueIndex('users_email_unique').on(t.email)],
 )
 
-export const accounts = pgTable(
+export const accountsTable = pgTable(
   'accounts',
   {
     id: uuid('id').defaultRandom().primaryKey(),
     userId: uuid('user_id')
       .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    provider: authProvider('provider').notNull(),
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
+    provider: authProviderEnum('provider').notNull(),
     providerUid: text('provider_uid').notNull(),
     passwordHash: text('password_hash'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -70,14 +70,14 @@ export const accounts = pgTable(
   ],
 )
 
-export const sessions = pgTable(
+export const sessionsTable = pgTable(
   'sessions',
   {
     // sha256(rawToken). The cookie holds the raw token; a DB leak never exposes a usable session.
     id: text('id').primaryKey(),
     userId: uuid('user_id')
       .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     ip: text('ip'),
@@ -86,21 +86,21 @@ export const sessions = pgTable(
   (t) => [index('sessions_user_idx').on(t.userId), index('sessions_expires_idx').on(t.expiresAt)],
 )
 
-export const emailVerificationTokens = pgTable(
+export const emailVerificationTokensTable = pgTable(
   'email_verification_tokens',
   {
     // sha256(rawToken); the verification link carries the raw token.
     id: text('id').primaryKey(),
     userId: uuid('user_id')
       .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('email_verification_user_idx').on(t.userId)],
 )
 
-export const passwordResetTokens = pgTable(
+export const passwordResetTokensTable = pgTable(
   'password_reset_tokens',
   {
     // sha256(rawToken); the reset link carries the raw token. Single-use and short-lived (1h) — a
@@ -108,7 +108,7 @@ export const passwordResetTokens = pgTable(
     id: text('id').primaryKey(),
     userId: uuid('user_id')
       .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -125,7 +125,7 @@ export const passwordResetTokens = pgTable(
  * drift. Disabling 2FA deletes a user's credentials + recovery codes. The challenges these flows
  * sign are ephemeral and live in Redis (like the OAuth state/PKCE handshake), never here.
  */
-export const webauthnCredentials = pgTable(
+export const webauthnCredentialsTable = pgTable(
   'webauthn_credentials',
   {
     // The credential id the authenticator returns (base64url). Globally unique, so it IS the key —
@@ -133,7 +133,7 @@ export const webauthnCredentials = pgTable(
     id: text('id').primaryKey(),
     userId: uuid('user_id')
       .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
     // base64url COSE public key. Only the PUBLIC half is ever stored; the private key never leaves
     // the device's secure hardware — that is the whole point of a passkey.
     publicKey: text('public_key').notNull(),
@@ -155,7 +155,7 @@ export const webauthnCredentials = pgTable(
   (t) => [index('webauthn_credentials_user_idx').on(t.userId)],
 )
 
-export const recoveryCodes = pgTable(
+export const recoveryCodesTable = pgTable(
   'recovery_codes',
   {
     // sha256(`${userId}:${code}`); the raw codes are shown to the user exactly once at enrollment and
@@ -165,7 +165,7 @@ export const recoveryCodes = pgTable(
     id: text('id').primaryKey(),
     userId: uuid('user_id')
       .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
     // NULL = unused. Set (not deleted) when consumed, so the UI can show "N of 10 codes remaining".
     usedAt: timestamp('used_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -197,13 +197,13 @@ const bytea = customType<{ data: Uint8Array; driverData: Buffer }>({
   fromDriver: (value) => new Uint8Array(value),
 })
 
-export const documents = pgTable(
+export const documentsTable = pgTable(
   'documents',
   {
     id: uuid('id').defaultRandom().primaryKey(),
     ownerId: uuid('owner_id')
       .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
     title: text('title').notNull().default('Untitled document'),
     // Compacted Y.Doc state (Y.encodeStateAsUpdate). NULL until the first compaction — a brand-new doc
     // is reconstructed purely from its update log. Loading = this snapshot + replay of newer updates.
@@ -217,7 +217,7 @@ export const documents = pgTable(
   (t) => [index('documents_owner_idx').on(t.ownerId)],
 )
 
-export const documentUpdates = pgTable(
+export const documentUpdatesTable = pgTable(
   'document_updates',
   {
     // bigserial — the append order IS the replay order. Yjs updates are commutative so order can't
@@ -226,7 +226,7 @@ export const documentUpdates = pgTable(
     seq: bigserial('seq', { mode: 'number' }).primaryKey(),
     documentId: uuid('document_id')
       .notNull()
-      .references(() => documents.id, { onDelete: 'cascade' }),
+      .references(() => documentsTable.id, { onDelete: 'cascade' }),
     // One Yjs update (the encoded diff of a single transaction), appended the instant it arrives.
     update: bytea('update').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -235,14 +235,14 @@ export const documentUpdates = pgTable(
   (t) => [index('document_updates_doc_seq_idx').on(t.documentId, t.seq)],
 )
 
-export type User = typeof users.$inferSelect
-export type NewUser = typeof users.$inferInsert
-export type Account = typeof accounts.$inferSelect
-export type Session = typeof sessions.$inferSelect
-export type WebauthnCredential = typeof webauthnCredentials.$inferSelect
-export type RecoveryCode = typeof recoveryCodes.$inferSelect
+export type UserRow = typeof usersTable.$inferSelect
+export type NewUserRow = typeof usersTable.$inferInsert
+export type AccountRow = typeof accountsTable.$inferSelect
+export type SessionRow = typeof sessionsTable.$inferSelect
+export type WebauthnCredentialRow = typeof webauthnCredentialsTable.$inferSelect
+export type RecoveryCodeRow = typeof recoveryCodesTable.$inferSelect
 // DocumentRow, not Document: the DOM already owns `Document` on the client, and this type's twin
 // crosses to web/. A distinct name keeps the two from ever colliding or auto-importing wrong.
-export type DocumentRow = typeof documents.$inferSelect
-export type NewDocumentRow = typeof documents.$inferInsert
-export type DocumentUpdateRow = typeof documentUpdates.$inferSelect
+export type DocumentRow = typeof documentsTable.$inferSelect
+export type NewDocumentRow = typeof documentsTable.$inferInsert
+export type DocumentUpdateRow = typeof documentUpdatesTable.$inferSelect

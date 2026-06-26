@@ -1,6 +1,6 @@
 import { and, desc, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { type DocumentRow, documents } from '../db/schema.ts'
+import { type DocumentRow, documentsTable } from '../db/schema.ts'
 
 // What the dashboard and editor header actually need — never the binary snapshot or the owner id.
 // Dates leave here as Date objects; the JSON layer renders them as ISO strings on the wire.
@@ -26,7 +26,7 @@ export const createDocument = async (input: {
   title?: string
 }): Promise<DocumentSummary> => {
   const [row] = await db
-    .insert(documents)
+    .insert(documentsTable)
     .values({ ownerId: input.ownerId, title: input.title })
     .returning()
   if (row === undefined) {
@@ -39,9 +39,9 @@ export const createDocument = async (input: {
 export const listDocumentsForOwner = async (ownerId: string): Promise<DocumentSummary[]> => {
   const rows = await db
     .select()
-    .from(documents)
-    .where(eq(documents.ownerId, ownerId))
-    .orderBy(desc(documents.updatedAt))
+    .from(documentsTable)
+    .where(eq(documentsTable.ownerId, ownerId))
+    .orderBy(desc(documentsTable.updatedAt))
   return rows.map(toSummary)
 }
 
@@ -54,8 +54,8 @@ export const getDocumentForOwner = async (input: {
 }): Promise<DocumentSummary | null> => {
   const [row] = await db
     .select()
-    .from(documents)
-    .where(and(eq(documents.id, input.documentId), eq(documents.ownerId, input.ownerId)))
+    .from(documentsTable)
+    .where(and(eq(documentsTable.id, input.documentId), eq(documentsTable.ownerId, input.ownerId)))
     .limit(1)
   return row === undefined ? null : toSummary(row)
 }
@@ -67,8 +67,8 @@ export const deleteDocumentForOwner = async (input: {
   ownerId: string
 }): Promise<boolean> => {
   const removed = await db
-    .delete(documents)
-    .where(and(eq(documents.id, input.documentId), eq(documents.ownerId, input.ownerId)))
-    .returning({ id: documents.id })
+    .delete(documentsTable)
+    .where(and(eq(documentsTable.id, input.documentId), eq(documentsTable.ownerId, input.ownerId)))
+    .returning({ id: documentsTable.id })
   return removed.length > 0
 }

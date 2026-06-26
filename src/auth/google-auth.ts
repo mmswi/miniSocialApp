@@ -1,22 +1,22 @@
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { isUniqueViolation } from '../db/errors.ts'
-import { AUTH_PROVIDERS, type User, accounts, users } from '../db/schema.ts'
+import { AUTH_PROVIDERS, type UserRow, accountsTable, usersTable } from '../db/schema.ts'
 import { conflict } from '../lib/errors.ts'
 import type { GoogleClaims } from './oauth.ts'
 import { createSession } from './session.ts'
 
 type CreatedSession = { rawToken: string; expiresAt: Date }
-type AuthResult = { user: User; session: CreatedSession }
+type AuthResult = { user: UserRow; session: CreatedSession }
 type SessionContext = { ip?: string; userAgent?: string }
 
-const openSessionFor = async (user: User, context?: SessionContext): Promise<AuthResult> => {
+const openSessionFor = async (user: UserRow, context?: SessionContext): Promise<AuthResult> => {
   const session = await createSession({ userId: user.id, ...context })
   return { user, session }
 }
 
-const loadUser = async (userId: string): Promise<User> => {
-  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1)
+const loadUser = async (userId: string): Promise<UserRow> => {
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1)
   if (user === undefined) {
     throw new Error('google account references a missing user')
   }
@@ -34,11 +34,11 @@ export const signInWithGoogle = async (input: {
   // 1. Returning Google user — the `sub` is already linked to a user, so just open a session.
   const [googleAccount] = await db
     .select()
-    .from(accounts)
+    .from(accountsTable)
     .where(
       and(
-        eq(accounts.provider, AUTH_PROVIDERS.google),
-        eq(accounts.providerUid, claims.googleUserId),
+        eq(accountsTable.provider, AUTH_PROVIDERS.google),
+        eq(accountsTable.providerUid, claims.googleUserId),
       ),
     )
     .limit(1)
@@ -47,7 +47,11 @@ export const signInWithGoogle = async (input: {
   }
 
   // 2. First time with this Google account, but a local user already owns the email.
-  const [existingUser] = await db.select().from(users).where(eq(users.email, claims.email)).limit(1)
+  const [existingUser] = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.email, claims.email))
+    .limit(1)
   if (existingUser !== undefined) {
     // Account-takeover guard: auto-link ONLY when BOTH sides have a proven email — Google says
     // verified AND the local account is verified. A local account can be created by anyone typing
@@ -61,7 +65,7 @@ export const signInWithGoogle = async (input: {
         'An account with this email already exists. Sign in with your password to link Google.',
       )
     }
-    await db.insert(accounts).values({
+    await db.insert(accountsTable).values({
       userId: existingUser.id,
       provider: AUTH_PROVIDERS.google,
       providerUid: claims.googleUserId,
@@ -71,11 +75,11 @@ export const signInWithGoogle = async (input: {
 
   // 3. Brand-new person — create the identity and the Google credential together. Google has already
   // verified the email, so the new user inherits that verified state.
-  let createdUser: User
+  let createdUser: UserRow
   try {
     createdUser = await db.transaction(async (tx) => {
       const [inserted] = await tx
-        .insert(users)
+        .insert(usersTable)
         .values({
           email: claims.email,
           emailVerified: claims.emailVerified,
@@ -86,7 +90,7 @@ export const signInWithGoogle = async (input: {
       if (inserted === undefined) {
         throw new Error('user insert returned no row')
       }
-      await tx.insert(accounts).values({
+      await tx.insert(accountsTable).values({
         userId: inserted.id,
         provider: AUTH_PROVIDERS.google,
         providerUid: claims.googleUserId,
@@ -101,11 +105,11 @@ export const signInWithGoogle = async (input: {
     if (isUniqueViolation(error)) {
       const [racedAccount] = await db
         .select()
-        .from(accounts)
+        .from(accountsTable)
         .where(
           and(
-            eq(accounts.provider, AUTH_PROVIDERS.google),
-            eq(accounts.providerUid, claims.googleUserId),
+            eq(accountsTable.provider, AUTH_PROVIDERS.google),
+            eq(accountsTable.providerUid, claims.googleUserId),
           ),
         )
         .limit(1)

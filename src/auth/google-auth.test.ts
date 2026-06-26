@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { AUTH_PROVIDERS, accounts, users } from '../db/schema.ts'
+import { AUTH_PROVIDERS, accountsTable, usersTable } from '../db/schema.ts'
 import { signInWithGoogle } from './google-auth.ts'
 import type { GoogleClaims } from './oauth.ts'
 import { hashPassword } from './password.ts'
@@ -29,7 +29,7 @@ const claimsFor = (email: string, overrides: Partial<GoogleClaims> = {}): Google
 
 afterAll(async () => {
   if (createdEmails.length > 0) {
-    await db.delete(users).where(inArray(users.email, createdEmails))
+    await db.delete(usersTable).where(inArray(usersTable.email, createdEmails))
   }
 })
 
@@ -44,11 +44,11 @@ describe('signInWithGoogle', () => {
 
     const [linked] = await db
       .select()
-      .from(accounts)
+      .from(accountsTable)
       .where(
         and(
-          eq(accounts.provider, AUTH_PROVIDERS.google),
-          eq(accounts.providerUid, claims.googleUserId),
+          eq(accountsTable.provider, AUTH_PROVIDERS.google),
+          eq(accountsTable.providerUid, claims.googleUserId),
         ),
       )
     expect(linked?.userId).toBe(user.id)
@@ -60,17 +60,17 @@ describe('signInWithGoogle', () => {
     const second = await signInWithGoogle({ claims })
 
     expect(second.user.id).toBe(first.user.id)
-    const rows = await db.select().from(users).where(eq(users.id, first.user.id))
+    const rows = await db.select().from(usersTable).where(eq(usersTable.id, first.user.id))
     expect(rows.length).toBe(1)
   })
 
   test('a verified google email auto-links to an existing verified local account', async () => {
     const email = uniqueEmail('g-link')
-    const [local] = await db.insert(users).values({ email, emailVerified: true }).returning()
+    const [local] = await db.insert(usersTable).values({ email, emailVerified: true }).returning()
     if (local === undefined) {
       throw new Error('failed to seed local user')
     }
-    await db.insert(accounts).values({
+    await db.insert(accountsTable).values({
       userId: local.id,
       provider: AUTH_PROVIDERS.password,
       providerUid: email,
@@ -82,14 +82,16 @@ describe('signInWithGoogle', () => {
     expect(user.id).toBe(local.id) // linked to the SAME user, not a duplicate
     const googleRows = await db
       .select()
-      .from(accounts)
-      .where(and(eq(accounts.userId, local.id), eq(accounts.provider, AUTH_PROVIDERS.google)))
+      .from(accountsTable)
+      .where(
+        and(eq(accountsTable.userId, local.id), eq(accountsTable.provider, AUTH_PROVIDERS.google)),
+      )
     expect(googleRows.length).toBe(1)
   })
 
   test('an unverified google email never auto-links (account-takeover guard)', async () => {
     const email = uniqueEmail('g-unverified-google')
-    await db.insert(users).values({ email, emailVerified: true }).returning()
+    await db.insert(usersTable).values({ email, emailVerified: true }).returning()
 
     await expect(
       signInWithGoogle({ claims: claimsFor(email, { emailVerified: false }) }),
@@ -98,7 +100,7 @@ describe('signInWithGoogle', () => {
 
   test('a verified google email does NOT auto-link to an unverified local account', async () => {
     const email = uniqueEmail('g-unverified-local')
-    await db.insert(users).values({ email, emailVerified: false }).returning()
+    await db.insert(usersTable).values({ email, emailVerified: false }).returning()
 
     await expect(
       signInWithGoogle({ claims: claimsFor(email, { emailVerified: true }) }),

@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { sessions } from '../db/schema.ts'
+import { sessionsTable } from '../db/schema.ts'
 import { redis } from '../lib/redis.ts'
 import { generateToken, hashToken } from './tokens.ts'
 
@@ -16,7 +16,7 @@ type CachedSession = { userId: string; expiresAtMs: number }
 const cacheKey = (sessionId: string): string => `session:${sessionId}`
 
 const revokeBySessionId = async (sessionId: string): Promise<void> => {
-  await db.delete(sessions).where(eq(sessions.id, sessionId))
+  await db.delete(sessionsTable).where(eq(sessionsTable.id, sessionId))
   await redis.del(cacheKey(sessionId))
 }
 
@@ -30,7 +30,7 @@ export const createSession = async (input: {
 }): Promise<CreatedSession> => {
   const rawToken = generateToken()
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS)
-  await db.insert(sessions).values({
+  await db.insert(sessionsTable).values({
     id: hashToken(rawToken),
     userId: input.userId,
     expiresAt,
@@ -57,7 +57,11 @@ export const getSessionUser = async (rawToken: string): Promise<ActiveSession | 
     return { userId: session.userId, sessionId }
   }
 
-  const [row] = await db.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1)
+  const [row] = await db
+    .select()
+    .from(sessionsTable)
+    .where(eq(sessionsTable.id, sessionId))
+    .limit(1)
   if (row === undefined) {
     return null
   }
@@ -80,5 +84,5 @@ export const revokeSession = (rawToken: string): Promise<void> =>
 // Logout everywhere. Postgres rows go immediately; any still-cached sessions for this user lapse
 // within the cache TTL rather than instantly (we don't track every session key per user).
 export const revokeAllUserSessions = async (userId: string): Promise<void> => {
-  await db.delete(sessions).where(eq(sessions.userId, userId))
+  await db.delete(sessionsTable).where(eq(sessionsTable.userId, userId))
 }

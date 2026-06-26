@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { users } from '../db/schema.ts'
+import { usersTable } from '../db/schema.ts'
 import {
   consumeRecoveryCode,
   countRemainingRecoveryCodes,
@@ -17,7 +17,7 @@ let userId = ''
 const CODE_SHAPE = /^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/
 
 beforeAll(async () => {
-  const [user] = await db.insert(users).values({ email: testEmail }).returning()
+  const [user] = await db.insert(usersTable).values({ email: testEmail }).returning()
   if (user === undefined) {
     throw new Error('failed to seed test user')
   }
@@ -25,7 +25,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await db.delete(users).where(eq(users.id, userId))
+  await db.delete(usersTable).where(eq(usersTable.id, userId))
 })
 
 describe('recovery codes', () => {
@@ -76,7 +76,7 @@ describe('recovery codes', () => {
 
   test('a user with no codes has zero remaining', async () => {
     const [freshUser] = await db
-      .insert(users)
+      .insert(usersTable)
       .values({ email: `recovery-none-${randomUUID()}@example.test` })
       .returning()
     if (freshUser === undefined) {
@@ -85,6 +85,6 @@ describe('recovery codes', () => {
 
     expect(await countRemainingRecoveryCodes(freshUser.id)).toBe(0)
 
-    await db.delete(users).where(eq(users.id, freshUser.id))
+    await db.delete(usersTable).where(eq(usersTable.id, freshUser.id))
   })
 })

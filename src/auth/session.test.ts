@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { sessions, users } from '../db/schema.ts'
+import { sessionsTable, usersTable } from '../db/schema.ts'
 import { createSession, getSessionUser, revokeAllUserSessions, revokeSession } from './session.ts'
 import { hashToken } from './tokens.ts'
 
@@ -12,7 +12,7 @@ const testEmail = `session-test-${randomUUID()}@example.test`
 let userId = ''
 
 beforeAll(async () => {
-  const [user] = await db.insert(users).values({ email: testEmail }).returning()
+  const [user] = await db.insert(usersTable).values({ email: testEmail }).returning()
   if (user === undefined) {
     throw new Error('failed to seed test user')
   }
@@ -22,7 +22,7 @@ beforeAll(async () => {
 afterAll(async () => {
   // Connection teardown lives in test/setup.ts (once per run). Here we only remove this file's
   // throwaway user; the cascade takes its sessions with it.
-  await db.delete(users).where(eq(users.id, userId))
+  await db.delete(usersTable).where(eq(usersTable.id, userId))
 })
 
 describe('sessions', () => {
@@ -44,7 +44,7 @@ describe('sessions', () => {
 
   test('an expired session is rejected and cleaned up', async () => {
     const rawToken = `expired-${randomUUID()}`
-    await db.insert(sessions).values({
+    await db.insert(sessionsTable).values({
       id: hashToken(rawToken),
       userId,
       expiresAt: new Date(Date.now() - 1000),
@@ -56,7 +56,7 @@ describe('sessions', () => {
     await createSession({ userId })
     await createSession({ userId })
     await revokeAllUserSessions(userId)
-    const remaining = await db.select().from(sessions).where(eq(sessions.userId, userId))
+    const remaining = await db.select().from(sessionsTable).where(eq(sessionsTable.userId, userId))
     expect(remaining.length).toBe(0)
   })
 })

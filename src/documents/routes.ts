@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import { parseOrThrow, requireSessionUser } from '../auth/route-helpers.ts'
+import { getAuthUser, parseOrThrow, requireAuthHook } from '../auth/route-helpers.ts'
 import { notFound } from '../lib/errors.ts'
 import {
   createDocument,
@@ -17,25 +17,28 @@ const documentIdParams = z.object({
   id: z.string().uuid(),
 })
 
-// Registered under /documents. Every route is gated by requireSessionUser — the single cookie→session
-// check shared with the auth plugin — and scoped to the caller as owner. Encapsulated as its own
-// plugin, so it inherits the app's cookie support and error handler from the parent context.
+// Registered under /documents. Every route here requires a session, so authentication is an onRequest
+// hook for the whole plugin (not re-awaited in each handler): requireAuthHook resolves the session once
+// per request and rejects 401 before parsing, and handlers read the result via getAuthUser. Each is then
+// scoped to the caller as owner. Encapsulated as its own plugin — the hook does not leak to other plugins.
 export const documentRoutes = async (app: FastifyInstance): Promise<void> => {
+  app.addHook('onRequest', requireAuthHook)
+
   app.get('/', async (req) => {
-    const { userId } = await requireSessionUser(req)
+    const { userId } = getAuthUser(req)
     const documents = await listDocumentsForOwner(userId)
     return { documents }
   })
 
   app.post('/', async (req, reply) => {
-    const { userId } = await requireSessionUser(req)
+    const { userId } = getAuthUser(req)
     const input = parseOrThrow(createDocumentBody, req.body)
     const document = await createDocument({ ownerId: userId, title: input.title })
     return reply.code(201).send({ document })
   })
 
   app.get('/:id', async (req) => {
-    const { userId } = await requireSessionUser(req)
+    const { userId } = getAuthUser(req)
     const { id } = parseOrThrow(documentIdParams, req.params)
     const document = await getDocumentForOwner({ documentId: id, ownerId: userId })
     if (document === null) {
@@ -45,7 +48,7 @@ export const documentRoutes = async (app: FastifyInstance): Promise<void> => {
   })
 
   app.delete('/:id', async (req, reply) => {
-    const { userId } = await requireSessionUser(req)
+    const { userId } = getAuthUser(req)
     const { id } = parseOrThrow(documentIdParams, req.params)
     const removed = await deleteDocumentForOwner({ documentId: id, ownerId: userId })
     if (!removed) {

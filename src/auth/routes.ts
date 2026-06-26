@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { db } from '../db/client.ts'
-import { users } from '../db/schema.ts'
+import { usersTable } from '../db/schema.ts'
 import { env } from '../lib/env.ts'
 import { badRequest, unauthorized } from '../lib/errors.ts'
 import {
@@ -147,7 +147,11 @@ export const authRoutes = async (app: FastifyInstance): Promise<void> => {
     if (active === null) {
       throw unauthorized('not_authenticated', 'Sign in to continue.')
     }
-    const [user] = await db.select().from(users).where(eq(users.id, active.userId)).limit(1)
+    const [user] = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.id, active.userId))
+      .limit(1)
     if (user === undefined) {
       throw unauthorized('not_authenticated', 'Sign in to continue.')
     }

@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { isUniqueViolation } from '../db/errors.ts'
-import { AUTH_PROVIDERS, accounts } from '../db/schema.ts'
+import { AUTH_PROVIDERS, accountsTable } from '../db/schema.ts'
 import { conflict } from '../lib/errors.ts'
 import type { GoogleClaims } from './oauth.ts'
 
@@ -24,11 +24,11 @@ export const linkGoogleAccount = async (input: {
   // Is this Google identity already spoken for?
   const [existingLink] = await db
     .select()
-    .from(accounts)
+    .from(accountsTable)
     .where(
       and(
-        eq(accounts.provider, AUTH_PROVIDERS.google),
-        eq(accounts.providerUid, claims.googleUserId),
+        eq(accountsTable.provider, AUTH_PROVIDERS.google),
+        eq(accountsTable.providerUid, claims.googleUserId),
       ),
     )
     .limit(1)
@@ -49,8 +49,8 @@ export const linkGoogleAccount = async (input: {
   // takeover-critical guarantee is the UNIQUE(provider, provider_uid) index enforced on insert below.
   const [ownGoogleAccount] = await db
     .select()
-    .from(accounts)
-    .where(and(eq(accounts.provider, AUTH_PROVIDERS.google), eq(accounts.userId, userId)))
+    .from(accountsTable)
+    .where(and(eq(accountsTable.provider, AUTH_PROVIDERS.google), eq(accountsTable.userId, userId)))
     .limit(1)
   if (ownGoogleAccount !== undefined) {
     throw conflict('google_link_exists', 'Your account already has a linked Google identity.')
@@ -58,7 +58,7 @@ export const linkGoogleAccount = async (input: {
 
   try {
     await db
-      .insert(accounts)
+      .insert(accountsTable)
       .values({ userId, provider: AUTH_PROVIDERS.google, providerUid: claims.googleUserId })
   } catch (error: unknown) {
     // Race: a concurrent link claimed the same sub between our check and this insert. The UNIQUE index
