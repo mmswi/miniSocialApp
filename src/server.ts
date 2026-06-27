@@ -11,6 +11,8 @@ import { documentRoutes } from './documents/routes.ts'
 import { env } from './lib/env.ts'
 import { AppError } from './lib/errors.ts'
 import { redis } from './lib/redis.ts'
+import { scheduleCompactionSweep } from './queue/compaction-queue.ts'
+import { createCompactionWorker } from './queue/compaction-worker.ts'
 import { createEmailWorker } from './queue/email-worker.ts'
 import { syncRoutes } from './sync/ws-routes.ts'
 
@@ -88,14 +90,16 @@ const startFromCli = async (): Promise<void> => {
   try {
     const address = await app.listen({ port: env.PORT, host: '0.0.0.0' })
     app.log.info(`listening on ${address}`)
-    // Dev convenience: co-locate the queue worker so a single `bun run api` still delivers email end to
-    // end (no second terminal to remember). Production runs the worker as its OWN process
-    // (`bun run src/worker.ts`) — there, a slow mail provider must never tie up an API container. Same
-    // worker module either way. `bun run api` uses --watch, which RESTARTS the process on change, so the
-    // worker is recreated fresh each time, not leaked.
+    // Dev convenience: co-locate the queue workers so a single `bun run api` delivers email AND folds the
+    // update log end to end (no second terminal to remember). Production runs the worker as its OWN
+    // process (`bun run src/worker.ts`) — there, a slow mail provider or compaction sweep must never tie
+    // up an API container. Same worker modules either way. `bun run api` uses --watch, which RESTARTS the
+    // process on change, so the workers are recreated fresh each time, not leaked.
     if (env.NODE_ENV === 'development') {
       createEmailWorker()
-      app.log.info('email worker started in-process (dev only)')
+      createCompactionWorker()
+      void scheduleCompactionSweep()
+      app.log.info('email + compaction workers started in-process (dev only)')
     }
   } catch (error: unknown) {
     app.log.error({ err: error }, 'failed to start')

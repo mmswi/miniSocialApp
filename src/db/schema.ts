@@ -181,10 +181,24 @@ export const recoveryCodesTable = pgTable(
  * A document's live state lives in a CRDT (Y.Doc). We persist it two ways at once:
  *   • every Yjs update is APPENDED to document_updates the instant the sync server receives it —
  *     durable immediately, no "process died before the debounced flush" data-loss window;
- *   • a single worker periodically COMPACTS the log into documents.snapshot and trims the folded
- *     rows (step 2 M4). Loading a doc = snapshot + replay of every update with seq > snapshotThrough.
- * Appends are commutative, so many sync instances can append concurrently with no leader election;
- * only the lone compactor writes the snapshot, so there is no last-writer-wins snapshot race.
+ *   • a single worker periodically COMPACTS the un-folded log into documents.snapshot and deletes
+ *     EXACTLY the rows it folded (step 2 M4, src/sync/compaction.ts).
+ *
+ * Loading a doc = snapshot + replay of EVERY row still in document_updates (the un-folded tail). There
+ * is no "seq > watermark" filter, on purpose: `seq` is a bigserial assigned at INSERT, but commits land
+ * out of order, so a lower seq can still be uncommitted (invisible) when a higher one is already
+ * visible. A "fold/delete everything ≤ N" watermark would drop such a late row before it was ever
+ * folded — silent data loss, the exact failure the append log exists to prevent. Deleting only the rows
+ * we actually folded leaves any late row in the log for the next sweep, and load replays whatever
+ * remains. Yjs updates are commutative, so replay order can't corrupt state.
+ *
+ * Appends are commutative and lock-free, so many sync instances can append concurrently with no leader
+ * election; the compactor takes FOR NO KEY UPDATE on the documents row so two overlapping sweeps can't
+ * clobber each other's snapshot. That lock mode is chosen so it does NOT conflict with the FK key-share
+ * lock an append takes on the parent documents row — a fold never blocks an append, or vice versa.
+ *
+ * (The DB still has a legacy `snapshot_through` column from migration 0003; it is no longer modeled
+ * here because the corrected load path replays the full tail instead of keying off a watermark.)
  *
  * Owner-only for now — teams + the reviewer/editor role matrix arrive at step 4.
  */
@@ -206,11 +220,9 @@ export const documentsTable = pgTable(
       .references(() => usersTable.id, { onDelete: 'cascade' }),
     title: text('title').notNull().default('Untitled document'),
     // Compacted Y.Doc state (Y.encodeStateAsUpdate). NULL until the first compaction — a brand-new doc
-    // is reconstructed purely from its update log. Loading = this snapshot + replay of newer updates.
+    // is reconstructed purely from its update log. Loading = this snapshot + replay of every remaining
+    // update row; the compactor deletes the rows it folds, so "remaining" is exactly the un-folded tail.
     snapshot: bytea('snapshot'),
-    // The document_updates.seq this snapshot already folds in. The compactor sets it, then deletes the
-    // folded rows; load replays only rows with seq > snapshotThrough, so nothing is applied twice.
-    snapshotThrough: bigint('snapshot_through', { mode: 'number' }).notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
