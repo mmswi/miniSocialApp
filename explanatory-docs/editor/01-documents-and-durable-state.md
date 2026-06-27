@@ -33,7 +33,6 @@ export const documents = pgTable('documents', {
   ownerId: uuid('owner_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   title: text('title').notNull().default('Untitled document'),
   snapshot: bytea('snapshot'),            // <- the content, but NULL right now
-  snapshotThrough: bigint('snapshot_through', { mode: 'number' }).notNull().default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
@@ -97,6 +96,8 @@ export const documentUpdates = pgTable('document_updates', {
 
 **Tier two — the snapshot.** A single background worker periodically reads the log, merges every update into one compacted state, writes it to `documents.snapshot`, and trims the rows it folded in.
 
+To **fold** means to take the snapshot plus the little update rows, replay them into one Y.Doc, re-encode that single state, and write it back as the new snapshot. Many small diffs collapse into one compacted blob. Then the rows that went into it are deleted, because the snapshot now stands for them.
+
 The flow, end to end:
 
     Mara types
@@ -105,15 +106,15 @@ The flow, end to end:
     ↓
     APPEND it to document_updates          (tier 1 — durable immediately)
     ↓  ... seconds later, in the worker ...
-    read snapshot + all newer updates
+    read snapshot + every remaining update
     ↓
     merge into one state
     ↓
-    write documents.snapshot, delete the folded rows   (tier 2 — compacted)
+    write documents.snapshot, delete exactly the rows folded   (tier 2 — compacted)
 
 Loading the memo back is the same idea in reverse:
 
-    snapshot  +  replay every update newer than the snapshot  =  current document
+    snapshot  +  replay every update still in the log  =  current document
 
 The append is what kills the data-loss window. The change is on disk before the editor even repaints. The snapshot is just an optimization on top, so the log never has to be replayed from the beginning of time.
 
@@ -121,27 +122,15 @@ The M1 milestone builds the *tables* for both tiers. The sync server that does t
 
 ---
 
-## Why `seq`, and why `snapshotThrough`
+## Why `seq`, and the housekeeping it enables
 
-Two columns look like bookkeeping but are doing real work.
+One column looks like bookkeeping but does real work: `document_updates.seq`, a `bigserial` — an always-increasing number Postgres assigns on insert. Yjs updates are *commutative* (apply them in any order and you still converge), so `seq` is **not** there to make merging safe. It does two smaller jobs: it gives the log a stable order so a rebuild is deterministic (identical every time), and it lets a fold name exactly which rows it folded.
 
-`document_updates.seq` is a `bigserial` — an always-increasing number, assigned by Postgres on insert. Yjs updates are *commutative* (apply them in any order and you converge to the same state), so order cannot corrupt anything. But a stable total order makes replay deterministic and gives the compactor one clean number to reason about.
+That fold is **compaction**, and it is the part of this design with real teeth. The obvious way to track "how much has been folded" — a `seq` watermark stored on the row — silently *loses edits* under concurrent writes, and serializing two folds without blocking the writers needs exactly the right Postgres lock. That earns its own milestone (M4) and its own walkthrough:
 
-That number is `documents.snapshotThrough`. It is a watermark: "this snapshot already includes every update up through seq N."
+> **→ See [`04-compaction-and-the-update-log.md`](./04-compaction-and-the-update-log.md)** for what compaction is, the watermark bug, and the fix.
 
-So the compactor's job has no race, even with many sync instances appending at once:
-
-    read snapshot (includes through N)
-    ↓
-    read updates where seq > N        (say, up to M)
-    ↓
-    merge, write snapshot, set snapshotThrough = M
-    ↓
-    delete updates where seq <= M
-
-Appends are commutative, so any number of writers can append with no coordination. Only the *one* worker ever writes the snapshot, so there is no last-writer-wins fight over it. No leader election, no lock. The watermark is the whole trick.
-
-Updates that arrive *during* compaction get a seq above M, so the trim never touches them. They wait for the next fold.
+Here it is enough to hold the shape: **append now, fold later; load = snapshot + whatever rows have not been folded yet.**
 
 ---
 
@@ -182,14 +171,14 @@ The five questions for this milestone:
     Where does it run?        The server. The CRDT lives in the sync process; Postgres is its disk.
     What shape is the data?   A documents row (metadata) + many small binary updates + one binary snapshot.
     What gets stored?         Every change as an appended update, immediately; a compacted snapshot, eventually.
-    What's computed fresh?    On load: snapshot + replay of newer updates → the current document.
+    What's computed fresh?    On load: snapshot + replay of the remaining updates → the current document.
     What's handed on?         A document id and an owner check that M2's sync layer reuses on ws upgrade.
 
 ---
 
 ## When this shape is overkill
 
-Two tiers is not free. It is two tables, a watermark, and a background worker, all to persist one document.
+Two tiers is not free. It is two tables, a background worker, and a compaction step (doc 04), all to persist one document.
 
 If this were a notes app where one person edits one doc and a lost half-second of typing is a shrug — you would not build this. You would `UPDATE` a column on a debounce and move on.
 
