@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import * as Y from 'yjs'
 import { useAuth } from '../auth/AuthProvider'
 import { CollaborativeEditor } from '../editor/CollaborativeEditor'
+import { DocumentTitle } from '../editor/DocumentTitle'
 import {
   type ConnectionStatus,
   type SyncProvider,
@@ -115,7 +116,13 @@ export const DocumentEditorPage = () => {
           <Link to="/" className="text-xs text-slate-500 hover:text-slate-800">
             ← Documents
           </Link>
-          <h1 className="text-lg font-semibold">{title ?? 'Loading…'}</h1>
+          <h1 className="text-lg font-semibold">
+            {title === null ? (
+              <span className="text-slate-400">Loading…</span>
+            ) : (
+              <DocumentTitle documentId={documentId} title={title} onRenamed={setTitle} />
+            )}
+          </h1>
         </div>
         <span className="flex items-center gap-2 text-xs text-slate-500">
           <span className={`inline-block h-2 w-2 rounded-full ${STATUS_DOT[status]}`} />

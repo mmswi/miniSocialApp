@@ -131,6 +131,81 @@ describe('/documents', () => {
     expect(ownerStillSees.statusCode).toBe(200)
   })
 
+  test('the owner can rename their document', async () => {
+    const token = await signInNewUser('doc-route-rename')
+    const created = await app.inject({
+      method: 'POST',
+      url: '/documents',
+      headers: authCookie(token),
+      payload: { title: 'Old name' },
+    })
+    const { document } = created.json<{ document: { id: string } }>()
+
+    const renamed = await app.inject({
+      method: 'PATCH',
+      url: `/documents/${document.id}`,
+      headers: authCookie(token),
+      payload: { title: 'New name' },
+    })
+    expect(renamed.statusCode).toBe(200)
+    expect(renamed.json<{ document: { title: string } }>().document.title).toBe('New name')
+
+    // The rename persisted — a fresh read sees it.
+    const fetched = await app.inject({
+      method: 'GET',
+      url: `/documents/${document.id}`,
+      headers: authCookie(token),
+    })
+    expect(fetched.json<{ document: { title: string } }>().document.title).toBe('New name')
+  })
+
+  test("a stranger cannot rename someone else's document — 404, and it stays unchanged", async () => {
+    const ownerToken = await signInNewUser('doc-route-rename-owner')
+    const created = await app.inject({
+      method: 'POST',
+      url: '/documents',
+      headers: authCookie(ownerToken),
+      payload: { title: 'mine' },
+    })
+    const { document } = created.json<{ document: { id: string } }>()
+
+    const strangerToken = await signInNewUser('doc-route-rename-stranger')
+    const asStranger = await app.inject({
+      method: 'PATCH',
+      url: `/documents/${document.id}`,
+      headers: authCookie(strangerToken),
+      payload: { title: 'hijacked' },
+    })
+    expect(asStranger.statusCode).toBe(404)
+
+    // The owner's title is untouched — the stranger's PATCH was a no-op, not a silent overwrite.
+    const ownerSees = await app.inject({
+      method: 'GET',
+      url: `/documents/${document.id}`,
+      headers: authCookie(ownerToken),
+    })
+    expect(ownerSees.json<{ document: { title: string } }>().document.title).toBe('mine')
+  })
+
+  test('renaming to a blank title is a 400', async () => {
+    const token = await signInNewUser('doc-route-rename-blank')
+    const created = await app.inject({
+      method: 'POST',
+      url: '/documents',
+      headers: authCookie(token),
+      payload: { title: 'keep me' },
+    })
+    const { document } = created.json<{ document: { id: string } }>()
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/documents/${document.id}`,
+      headers: authCookie(token),
+      payload: { title: '   ' },
+    })
+    expect(response.statusCode).toBe(400)
+  })
+
   test('a non-uuid id is a 400, not a 404', async () => {
     const token = await signInNewUser('doc-route-badid')
     const response = await app.inject({

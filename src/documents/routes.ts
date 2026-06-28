@@ -7,10 +7,17 @@ import {
   deleteDocumentForOwner,
   getDocumentForOwner,
   listDocumentsForOwner,
+  renameDocumentForOwner,
 } from './documents.ts'
 
 const createDocumentBody = z.object({
   title: z.string().trim().min(1).max(200).optional(),
+})
+
+// Rename requires a real title — same trim/length rule as create, minus the optional: a PATCH that
+// clears the name is a 400, not a silent "Untitled".
+const renameDocumentBody = z.object({
+  title: z.string().trim().min(1).max(200),
 })
 
 const documentIdParams = z.object({
@@ -41,6 +48,21 @@ export const documentRoutes = async (app: FastifyInstance): Promise<void> => {
     const { userId } = getAuthUser(req)
     const { id } = parseOrThrow(documentIdParams, req.params)
     const document = await getDocumentForOwner({ documentId: id, ownerId: userId })
+    if (document === null) {
+      throw notFound('document_not_found', 'Document not found.')
+    }
+    return { document }
+  })
+
+  app.patch('/:id', async (req) => {
+    const { userId } = getAuthUser(req)
+    const { id } = parseOrThrow(documentIdParams, req.params)
+    const input = parseOrThrow(renameDocumentBody, req.body)
+    const document = await renameDocumentForOwner({
+      documentId: id,
+      ownerId: userId,
+      title: input.title,
+    })
     if (document === null) {
       throw notFound('document_not_found', 'Document not found.')
     }

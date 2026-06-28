@@ -188,5 +188,13 @@ export const API_createDocument = (
   document: DocumentMeta
 }> => request('/documents', { method: 'POST', body: JSON.stringify(input) })
 
+// Rename. The server trims and rejects an empty title (400 → ApiError), so the caller should send a
+// non-empty title; it returns the updated metadata so the UI can reflect the canonical (trimmed) name.
+export const API_renameDocument = (
+  id: string,
+  title: string,
+): Promise<{ document: DocumentMeta }> =>
+  request(`/documents/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) })
+
 export const API_deleteDocument = (id: string): Promise<null> =>
   request(`/documents/${id}`, { method: 'DELETE' })
