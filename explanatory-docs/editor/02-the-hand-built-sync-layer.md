@@ -64,6 +64,8 @@ Apply `update_M` then `update_T`, or `update_T` then `update_M` — Yjs guarante
 
 That is the property the whole sync layer is built to exploit. Our job is not to merge anything. Our job is to make sure every update reaches every participant, exactly enough times.
 
+(*How* Yjs guarantees that same-result-in-any-order — the actual merge algorithm, with worked examples of two people typing at the same spot — is its own deep-dive: see [`05-the-crdt-merge-algorithm.md`](./05-the-crdt-merge-algorithm.md).)
+
 ---
 
 ## The flow of one keystroke

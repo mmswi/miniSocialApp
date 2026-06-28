@@ -145,23 +145,75 @@ The jitter matters at scale: if the server restarts and 200 clients all reconnec
 
 ## The React lifecycle gotcha
 
-There is one non-obvious bug this code is shaped to avoid.
+There is one non-obvious bug this code is shaped to avoid, and the fix only makes sense once you've seen the broken version.
 
-You might create the Y.Doc and provider with `useMemo`, and tear them down in an effect cleanup. In React StrictMode (dev), every component mounts, unmounts, and remounts once on purpose. So the cleanup runs — destroying the provider — and then the component remounts holding the *same destroyed* memo. Dead socket, no editor.
+The instinct is `useMemo`. The `Y.Doc` and provider are expensive and you want them built *once per document*, not rebuilt on every render — that is exactly what `useMemo` is for. You memoize them, and tear them down in an effect cleanup:
 
-So the doc and provider are created **inside the effect**, not in a memo:
+```tsx
+// THE BROKEN VERSION — do not ship this
+const doc = useMemo(() => new Y.Doc(), [documentId])
+const provider = useMemo(
+  () => createSyncProvider({ documentId, doc, onStatusChange: setStatus }),
+  [documentId, doc],
+)
 
-```ts
-// web/src/pages/DocumentEditorPage.tsx
+useEffect(() => {
+  // ◄── THIS returned function is the cleanup. It tears down BOTH memoized resources:
+  return () => {
+    provider.destroy()   // closes the WebSocket and stops syncing  → dead socket
+    doc.destroy()        // tears down the CRDT state TipTap is bound to → dead document
+  }
+}, [provider, doc])
+```
+
+Both lines matter equally — neither resource is rebuilt after the cycle below, so the editor ends up bound to a dead socket *and* a dead `Y.Doc`. (If anything `doc.destroy()` is the worse one: a dead socket only stops network sync, but a destroyed `Y.Doc` is the editor's whole data model, gone.) The arrow just marks where the teardown lives.
+
+It reads correctly. It even works in production. It is broken in development, and the cause is **React StrictMode**.
+
+In dev, StrictMode deliberately mounts every component, immediately unmounts it, then mounts it again — once — to surface effects that don't survive a remount. The subtlety is *what* it does across that cycle: it re-runs your **effects** (cleanup, then setup again), but it does **not** re-run the component's `useMemo` factories. There is no fresh render in between, and the deps (`documentId`) haven't changed — so the memo keeps handing back the instance it already built.
+
+Trace it:
+
+    1. Mount
+       useMemo builds doc D1 + provider P1        (P1 opens the WebSocket)
+       effect setup runs                           (no-op — the effect is only a cleanup)
+    2. Simulated unmount
+       effect CLEANUP runs → provider.destroy() AND doc.destroy()    ◄── both torn down here
+                                                  (P1's socket closed, D1's CRDT state gone)
+    3. Simulated remount
+       NO re-render, deps unchanged →
+         useMemo returns the SAME D1, P1           (the factory does NOT run again)
+       effect setup runs again                      (still a no-op)
+    4. The component now holds D1 and P1 — both destroyed in step 2, neither rebuilt.
+       Dead socket AND dead document. The editor renders against a corpse.
+
+The bug is a **split between creation and destruction**. Creation ran *once*, in the memo, and survives the remount. Destruction runs on *every* unmount, in the effect cleanup. One StrictMode cycle gives you one destroy and zero rebuilds — and they are now out of sync.
+
+The fix is to put creation and destruction in the **same place** — the effect — so every teardown is paired with a fresh build:
+
+```tsx
+// web/src/pages/DocumentEditorPage.tsx — the real version
 useEffect(() => {
   const doc = new Y.Doc()
   const provider = createSyncProvider({ documentId, doc, onStatusChange: setStatus })
-  setSession({ doc, provider })
-  return () => { provider.destroy(); doc.destroy(); setSession(null) }
+  setSession({ doc, provider })            // hand the fresh pair to render
+  return () => {
+    provider.destroy()
+    doc.destroy()
+    setSession(null)
+  }
 }, [documentId])
 ```
 
-Now the lifecycle is honest: each mount builds a fresh pair, and the cleanup destroys exactly the one it built. A StrictMode remount makes a new one. In production, where the double-mount doesn't happen, it's created once.
+Now run the *same* StrictMode cycle:
+
+    1. Mount:             effect setup → build D1 + P1, setSession(D1/P1)
+    2. Simulated unmount: cleanup → destroy D1 + P1, setSession(null)
+    3. Simulated remount: effect setup AGAIN → build a FRESH D2 + P2, setSession(D2/P2)
+
+Every cleanup is matched by a build, because both live in the effect that StrictMode re-runs. Step 3 hands the editor a brand-new, live pair. In production, where the double-mount doesn't happen, the effect just runs once.
+
+One consequence falls out of this: because the pair is built *inside* the effect (after the first render, not during it), the first render has no provider yet. That is why the pair lives in `session` state with a `Loading editor…` fallback — render waits for the effect to hand it a live pair, rather than `useMemo` producing one mid-render.
 
 The five questions for the client half:
 
