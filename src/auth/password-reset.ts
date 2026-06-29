@@ -1,6 +1,12 @@
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { AUTH_PROVIDERS, accounts, passwordResetTokens, sessions, users } from '../db/schema.ts'
+import {
+  AUTH_PROVIDERS,
+  accountsTable,
+  passwordResetTokensTable,
+  sessionsTable,
+  usersTable,
+} from '../db/schema.ts'
 import { env } from '../lib/env.ts'
 import { badRequest } from '../lib/errors.ts'
 import { enqueueEmail } from '../queue/email-queue.ts'
@@ -38,9 +44,9 @@ const sendPasswordChangedEmail = async (to: string): Promise<void> => {
 // Issues a single-use reset token (only its hash is stored). Drops any prior unused token for this user
 // first, so requesting a new link invalidates the old one — only the most recent link ever works.
 const createPasswordResetToken = async (userId: string): Promise<{ rawToken: string }> => {
-  await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, userId))
+  await db.delete(passwordResetTokensTable).where(eq(passwordResetTokensTable.userId, userId))
   const rawToken = generateToken()
-  await db.insert(passwordResetTokens).values({
+  await db.insert(passwordResetTokensTable).values({
     id: hashToken(rawToken),
     userId,
     expiresAt: new Date(Date.now() + RESET_TTL_MS),
@@ -57,8 +63,13 @@ export const requestPasswordReset = async (rawEmail: string): Promise<void> => {
   const email = normalizeEmail(rawEmail)
   const [account] = await db
     .select()
-    .from(accounts)
-    .where(and(eq(accounts.provider, AUTH_PROVIDERS.password), eq(accounts.providerUid, email)))
+    .from(accountsTable)
+    .where(
+      and(
+        eq(accountsTable.provider, AUTH_PROVIDERS.password),
+        eq(accountsTable.providerUid, email),
+      ),
+    )
     .limit(1)
 
   if (account === undefined || account.passwordHash === null) {
@@ -84,8 +95,8 @@ export const resetPassword = async (rawToken: string, newPassword: string): Prom
   const id = hashToken(rawToken)
   const [row] = await db
     .select()
-    .from(passwordResetTokens)
-    .where(eq(passwordResetTokens.id, id))
+    .from(passwordResetTokensTable)
+    .where(eq(passwordResetTokensTable.id, id))
     .limit(1)
 
   if (row === undefined) {
@@ -95,7 +106,7 @@ export const resetPassword = async (rawToken: string, newPassword: string): Prom
     )
   }
   if (row.expiresAt.getTime() <= Date.now()) {
-    await db.delete(passwordResetTokens).where(eq(passwordResetTokens.id, id))
+    await db.delete(passwordResetTokensTable).where(eq(passwordResetTokensTable.id, id))
     throw badRequest(
       'reset_token_expired',
       'This password reset link has expired. Request a new one.',
@@ -103,9 +114,9 @@ export const resetPassword = async (rawToken: string, newPassword: string): Prom
   }
 
   const [user] = await db
-    .select({ email: users.email })
-    .from(users)
-    .where(eq(users.id, row.userId))
+    .select({ email: usersTable.email })
+    .from(usersTable)
+    .where(eq(usersTable.id, row.userId))
     .limit(1)
 
   // argon2id is the dominant cost; do it outside the transaction so the txn (and its row locks) stays
@@ -119,12 +130,17 @@ export const resetPassword = async (rawToken: string, newPassword: string): Prom
   // existing login dies. (Cached sessions still lapse within the session cache's 60s TTL, not instantly.)
   await db.transaction(async (tx) => {
     await tx
-      .update(accounts)
+      .update(accountsTable)
       .set({ passwordHash })
-      .where(and(eq(accounts.userId, row.userId), eq(accounts.provider, AUTH_PROVIDERS.password)))
-    await tx.update(users).set({ emailVerified: true }).where(eq(users.id, row.userId))
-    await tx.delete(passwordResetTokens).where(eq(passwordResetTokens.id, id))
-    await tx.delete(sessions).where(eq(sessions.userId, row.userId))
+      .where(
+        and(
+          eq(accountsTable.userId, row.userId),
+          eq(accountsTable.provider, AUTH_PROVIDERS.password),
+        ),
+      )
+    await tx.update(usersTable).set({ emailVerified: true }).where(eq(usersTable.id, row.userId))
+    await tx.delete(passwordResetTokensTable).where(eq(passwordResetTokensTable.id, id))
+    await tx.delete(sessionsTable).where(eq(sessionsTable.userId, row.userId))
   })
 
   if (user !== undefined) {

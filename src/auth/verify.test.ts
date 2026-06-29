@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { eq, inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { emailVerificationTokens, users } from '../db/schema.ts'
+import { emailVerificationTokensTable, usersTable } from '../db/schema.ts'
 import { sentEmails } from '../lib/email.ts'
 import { env } from '../lib/env.ts'
 import { buildServer } from '../server.ts'
@@ -18,7 +18,7 @@ const createdUserIds: string[] = []
 
 const seedUser = async (emailVerified = false): Promise<string> => {
   const email = `verify-${randomUUID()}@example.test`
-  const [user] = await db.insert(users).values({ email, emailVerified }).returning()
+  const [user] = await db.insert(usersTable).values({ email, emailVerified }).returning()
   if (user === undefined) {
     throw new Error('failed to seed test user')
   }
@@ -28,7 +28,7 @@ const seedUser = async (emailVerified = false): Promise<string> => {
 
 afterAll(async () => {
   if (createdUserIds.length > 0) {
-    await db.delete(users).where(inArray(users.id, createdUserIds))
+    await db.delete(usersTable).where(inArray(usersTable.id, createdUserIds))
   }
   await app.close()
 })
@@ -40,8 +40,8 @@ describe('email verification tokens', () => {
 
     const [row] = await db
       .select()
-      .from(emailVerificationTokens)
-      .where(eq(emailVerificationTokens.id, hashToken(rawToken)))
+      .from(emailVerificationTokensTable)
+      .where(eq(emailVerificationTokensTable.id, hashToken(rawToken)))
     expect(row?.userId).toBe(userId)
     expect(row?.id).not.toBe(rawToken) // the stored id is the hash, not the link's token
   })
@@ -53,7 +53,7 @@ describe('email verification tokens', () => {
     const result = await verifyEmailToken(rawToken)
     expect(result.userId).toBe(userId)
 
-    const [user] = await db.select().from(users).where(eq(users.id, userId))
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId))
     expect(user?.emailVerified).toBe(true)
 
     // Single-use: the row was burned, so a second click fails.
@@ -63,7 +63,7 @@ describe('email verification tokens', () => {
   test('an expired token is rejected, removed, and leaves the user unverified', async () => {
     const userId = await seedUser()
     const rawToken = `expired-${randomUUID()}`
-    await db.insert(emailVerificationTokens).values({
+    await db.insert(emailVerificationTokensTable).values({
       id: hashToken(rawToken),
       userId,
       expiresAt: new Date(Date.now() - 1000),
@@ -73,11 +73,11 @@ describe('email verification tokens', () => {
 
     const [row] = await db
       .select()
-      .from(emailVerificationTokens)
-      .where(eq(emailVerificationTokens.id, hashToken(rawToken)))
+      .from(emailVerificationTokensTable)
+      .where(eq(emailVerificationTokensTable.id, hashToken(rawToken)))
     expect(row).toBeUndefined()
 
-    const [user] = await db.select().from(users).where(eq(users.id, userId))
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId))
     expect(user?.emailVerified).toBe(false)
   })
 
@@ -90,7 +90,7 @@ describe('email verification tokens', () => {
     await signupWithPassword({ email, password: 'a real enough password' })
 
     // Signup no longer returns the user (uniform no-enumeration response); fetch it by email.
-    const [user] = await db.select().from(users).where(eq(users.email, email))
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.email, email))
     if (user === undefined) {
       throw new Error('signup did not create the user')
     }
@@ -99,8 +99,8 @@ describe('email verification tokens', () => {
     expect(user.emailVerified).toBe(false)
     const rows = await db
       .select()
-      .from(emailVerificationTokens)
-      .where(eq(emailVerificationTokens.userId, user.id))
+      .from(emailVerificationTokensTable)
+      .where(eq(emailVerificationTokensTable.userId, user.id))
     expect(rows.length).toBe(1)
   })
 })
@@ -114,7 +114,7 @@ describe('GET /auth/verify', () => {
     expect(res.statusCode).toBe(302)
     expect(String(res.headers.location)).toContain(env.APP_URL)
 
-    const [user] = await db.select().from(users).where(eq(users.id, userId))
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId))
     expect(user?.emailVerified).toBe(true)
   })
 
@@ -156,7 +156,7 @@ describe('signup → emailed link → verify → login (end to end)', () => {
     })
     expect(signup.statusCode).toBe(200)
     // Signup returns no user now; look it up by email to drive the rest of the flow.
-    const [created] = await db.select().from(users).where(eq(users.email, email))
+    const [created] = await db.select().from(usersTable).where(eq(usersTable.email, email))
     if (created === undefined) {
       throw new Error('signup did not create the user')
     }
@@ -168,13 +168,13 @@ describe('signup → emailed link → verify → login (end to end)', () => {
     const rawToken = message?.text.match(/token=(\S+)/)?.[1]
     expect(rawToken).toBeDefined()
 
-    const before = await db.select().from(users).where(eq(users.id, userId))
+    const before = await db.select().from(usersTable).where(eq(usersTable.id, userId))
     expect(before[0]?.emailVerified).toBe(false)
 
     const verify = await app.inject({ method: 'GET', url: `/auth/verify?token=${rawToken}` })
     expect(verify.statusCode).toBe(302)
 
-    const after = await db.select().from(users).where(eq(users.id, userId))
+    const after = await db.select().from(usersTable).where(eq(usersTable.id, userId))
     expect(after[0]?.emailVerified).toBe(true)
 
     // Login still works, and the session now reports a verified email.

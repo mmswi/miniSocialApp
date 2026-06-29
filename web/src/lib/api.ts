@@ -161,3 +161,40 @@ export const API_2faDisable = (
   proof: { assertion: AuthenticationResponseJSON } | { recoveryCode: string },
 ): Promise<{ disabled: true }> =>
   request('/auth/2fa/disable', { method: 'POST', body: JSON.stringify(proof) })
+
+// --- documents ---
+
+// A document as the client holds it — the server's DocumentSummary wire shape (no binary snapshot).
+// Dates arrive as ISO strings over JSON. Named distinctly from the server type and the DOM's own
+// `Document` so nothing in web/ can auto-import the wrong one across the boundary.
+export type DocumentMeta = {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+}
+
+export const API_listDocuments = (): Promise<{ documents: DocumentMeta[] }> => request('/documents')
+
+// One document's metadata (for the editor header). A 404 (not yours / unknown) surfaces as an ApiError
+// with status 404 — the editor page shows a not-found state rather than opening a blank doc.
+export const API_getDocument = (id: string): Promise<{ document: DocumentMeta }> =>
+  request(`/documents/${id}`)
+
+// No title sends `{}`, so the server applies its default ('Untitled document').
+export const API_createDocument = (
+  input: { title?: string } = {},
+): Promise<{
+  document: DocumentMeta
+}> => request('/documents', { method: 'POST', body: JSON.stringify(input) })
+
+// Rename. The server trims and rejects an empty title (400 → ApiError), so the caller should send a
+// non-empty title; it returns the updated metadata so the UI can reflect the canonical (trimmed) name.
+export const API_renameDocument = (
+  id: string,
+  title: string,
+): Promise<{ document: DocumentMeta }> =>
+  request(`/documents/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) })
+
+export const API_deleteDocument = (id: string): Promise<null> =>
+  request(`/documents/${id}`, { method: 'DELETE' })

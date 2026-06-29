@@ -1,15 +1,20 @@
 import cookie from '@fastify/cookie'
 import rateLimit from '@fastify/rate-limit'
+import websocket from '@fastify/websocket'
 import { sql } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import Fastify from 'fastify'
 import { authRateLimitOptions } from './auth/ratelimit.ts'
 import { authRoutes } from './auth/routes.ts'
 import { db } from './db/client.ts'
+import { documentRoutes } from './documents/routes.ts'
 import { env } from './lib/env.ts'
 import { AppError } from './lib/errors.ts'
 import { redis } from './lib/redis.ts'
+import { scheduleCompactionSweep } from './queue/compaction-queue.ts'
+import { createCompactionWorker } from './queue/compaction-worker.ts'
 import { createEmailWorker } from './queue/email-worker.ts'
+import { syncRoutes } from './sync/ws-routes.ts'
 
 type BuildServerOptions = { enableRateLimit?: boolean }
 
@@ -27,6 +32,10 @@ export const buildServer = (options: BuildServerOptions = {}): FastifyInstance =
     trustProxy: env.TRUST_PROXY === '' ? false : env.TRUST_PROXY,
   })
   app.register(cookie, { secret: env.COOKIE_SECRET })
+
+  // WebSocket support for the realtime sync layer. Registered after cookie so the ws routes' auth-on-
+  // upgrade hook can read the session cookie, and before the routes that declare `{ websocket: true }`.
+  app.register(websocket)
 
   // Registered before the routes so each auth route's `config.rateLimit` is applied. The plugin is
   // fastify-plugin-wrapped, so this single registration also covers the routes in the /auth child.
@@ -65,6 +74,14 @@ export const buildServer = (options: BuildServerOptions = {}): FastifyInstance =
   // Auth endpoints live under /auth — signup, login, logout, and the session check (/me).
   app.register(authRoutes, { prefix: '/auth' })
 
+  // Document CRUD lives under /documents — owner-scoped list/create/get/delete. The realtime editing
+  // of a document's contents is the ws sync layer (step 2 M2), not these REST routes.
+  app.register(documentRoutes, { prefix: '/documents' })
+
+  // The realtime sync endpoint, /documents/:id/sync (ws). Auth-on-upgrade reuses the same owner check
+  // as the REST routes. Declares its full path, so it's registered at the root, not under a prefix.
+  app.register(syncRoutes)
+
   return app
 }
 
@@ -73,14 +90,16 @@ const startFromCli = async (): Promise<void> => {
   try {
     const address = await app.listen({ port: env.PORT, host: '0.0.0.0' })
     app.log.info(`listening on ${address}`)
-    // Dev convenience: co-locate the queue worker so a single `bun run api` still delivers email end to
-    // end (no second terminal to remember). Production runs the worker as its OWN process
-    // (`bun run src/worker.ts`) — there, a slow mail provider must never tie up an API container. Same
-    // worker module either way. `bun run api` uses --watch, which RESTARTS the process on change, so the
-    // worker is recreated fresh each time, not leaked.
+    // Dev convenience: co-locate the queue workers so a single `bun run api` delivers email AND folds the
+    // update log end to end (no second terminal to remember). Production runs the worker as its OWN
+    // process (`bun run src/worker.ts`) — there, a slow mail provider or compaction sweep must never tie
+    // up an API container. Same worker modules either way. `bun run api` uses --watch, which RESTARTS the
+    // process on change, so the workers are recreated fresh each time, not leaked.
     if (env.NODE_ENV === 'development') {
       createEmailWorker()
-      app.log.info('email worker started in-process (dev only)')
+      createCompactionWorker()
+      void scheduleCompactionSweep()
+      app.log.info('email + compaction workers started in-process (dev only)')
     }
   } catch (error: unknown) {
     app.log.error({ err: error }, 'failed to start')

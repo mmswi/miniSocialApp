@@ -4,7 +4,7 @@ import type { AuthenticatorTransportFuture } from '@simplewebauthn/server'
 import { isoBase64URL } from '@simplewebauthn/server/helpers'
 import { eq, inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { users } from '../db/schema.ts'
+import { usersTable } from '../db/schema.ts'
 import { buildServer } from '../server.ts'
 import { MFA_COOKIE_NAME, SESSION_COOKIE_NAME } from './cookies.ts'
 import { generateRecoveryCodes } from './recovery-codes.ts'
@@ -48,7 +48,7 @@ const createTwoFactorUser = async (
 ): Promise<{ email: string; userId: string; credentialId: string; codes: string[] }> => {
   const email = uniqueEmail(prefix)
   await signup(email)
-  const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1)
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.email, email)).limit(1)
   if (user === undefined) {
     throw new Error(`expected a user for ${email}`)
   }
@@ -129,7 +129,7 @@ const storeExtraPasskey = async (userId: string): Promise<string> => {
 
 afterAll(async () => {
   if (createdEmails.length > 0) {
-    await db.delete(users).where(inArray(users.email, createdEmails))
+    await db.delete(usersTable).where(inArray(usersTable.email, createdEmails))
   }
   await app.close()
 })

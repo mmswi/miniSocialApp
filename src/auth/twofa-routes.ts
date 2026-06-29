@@ -1,7 +1,7 @@
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simplewebauthn/server'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { z } from 'zod'
-import type { WebauthnCredential } from '../db/schema.ts'
+import type { WebauthnCredentialRow } from '../db/schema.ts'
 import { badRequest, conflict, forbidden, unauthorized } from '../lib/errors.ts'
 import { MFA_COOKIE_NAME, clearMfaCookie, setSessionCookie } from './cookies.ts'
 import { attachPendingMfaChallenge, consumePendingMfa, loadPendingMfa } from './mfa.ts'
@@ -111,7 +111,7 @@ const finishMfaLogin = async (
 }
 
 // The Security page's view of a passkey — never the public key, counter, or userId.
-const publicPasskey = (credential: WebauthnCredential) => ({
+const publicPasskey = (credential: WebauthnCredentialRow) => ({
   id: credential.id,
   name: credential.name,
   backedUp: credential.backedUp,
@@ -194,8 +194,10 @@ export const twoFaRoutes = async (app: FastifyInstance): Promise<void> => {
       // locked out by losing this brand-new device. Check "is first" BEFORE the new row is stored.
       const isFirstPasskey = !(await hasEnrolledPasskey(active.userId))
       await storePasskey({ userId: active.userId, registration: verified, name: body.name ?? null })
-      const recoveryCodes = isFirstPasskey ? await generateRecoveryCodes(active.userId) : undefined
-      return { credentialId: verified.credentialId, recoveryCodes }
+      const recoveryCodesTable = isFirstPasskey
+        ? await generateRecoveryCodes(active.userId)
+        : undefined
+      return { credentialId: verified.credentialId, recoveryCodesTable }
     },
   )
 

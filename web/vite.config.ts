@@ -14,6 +14,9 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       '/auth': 'http://localhost:3001',
+      // ws: true so the editor's WebSocket upgrade (/documents/:id/sync) is proxied too, not just the
+      // REST calls under /documents. Same origin in the browser → the session cookie rides the upgrade.
+      '/documents': { target: 'http://localhost:3001', ws: true },
       '/health': 'http://localhost:3001',
       '/ready': 'http://localhost:3001',
     },

@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { and, eq, inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { AUTH_PROVIDERS, accounts, users } from '../db/schema.ts'
+import { AUTH_PROVIDERS, accountsTable, usersTable } from '../db/schema.ts'
 import { signInWithGoogle } from './google-auth.ts'
 import { linkGoogleAccount } from './linking.ts'
 import type { GoogleClaims } from './oauth.ts'
@@ -16,7 +16,7 @@ const createdEmails: string[] = []
 const seedUser = async (emailVerified = true): Promise<string> => {
   const email = `link-${randomUUID()}@example.test`
   createdEmails.push(email)
-  const [user] = await db.insert(users).values({ email, emailVerified }).returning()
+  const [user] = await db.insert(usersTable).values({ email, emailVerified }).returning()
   if (user === undefined) {
     throw new Error('failed to seed test user')
   }
@@ -35,12 +35,12 @@ const googleClaims = (overrides: Partial<GoogleClaims> = {}): GoogleClaims => ({
 const googleRowsFor = (userId: string) =>
   db
     .select()
-    .from(accounts)
-    .where(and(eq(accounts.userId, userId), eq(accounts.provider, AUTH_PROVIDERS.google)))
+    .from(accountsTable)
+    .where(and(eq(accountsTable.userId, userId), eq(accountsTable.provider, AUTH_PROVIDERS.google)))
 
 afterAll(async () => {
   if (createdEmails.length > 0) {
-    await db.delete(users).where(inArray(users.email, createdEmails))
+    await db.delete(usersTable).where(inArray(usersTable.email, createdEmails))
   }
 })
 

@@ -1,9 +1,9 @@
 import { eq } from 'drizzle-orm'
-import type { FastifyRequest } from 'fastify'
+import type { FastifyRequest, onRequestAsyncHookHandler } from 'fastify'
 import type { z } from 'zod'
 import { db } from '../db/client.ts'
-import { type AuthProviderId, type User, accounts, users } from '../db/schema.ts'
-import { badRequest, unauthorized } from '../lib/errors.ts'
+import { type AuthProviderId, type UserRow, accountsTable, usersTable } from '../db/schema.ts'
+import { AppError, badRequest, unauthorized } from '../lib/errors.ts'
 import { SESSION_COOKIE_NAME } from './cookies.ts'
 import { getSessionUser } from './session.ts'
 
@@ -27,15 +27,15 @@ export const parseOrThrow = <Output>(schema: z.ZodType<Output>, body: unknown): 
 // connect the very account they just used.
 export const getLinkedProviders = async (userId: string): Promise<AuthProviderId[]> => {
   const rows = await db
-    .select({ provider: accounts.provider })
-    .from(accounts)
-    .where(eq(accounts.userId, userId))
+    .select({ provider: accountsTable.provider })
+    .from(accountsTable)
+    .where(eq(accountsTable.userId, userId))
   return rows.map((row) => row.provider)
 }
 
 // The client never sees the password hash or internal columns — only this safe projection, plus the
 // set of linked providers so the UI can reflect which sign-in methods are connected.
-export const publicUser = (user: User, linkedProviders: AuthProviderId[]) => ({
+export const publicUser = (user: UserRow, linkedProviders: AuthProviderId[]) => ({
   id: user.id,
   email: user.email,
   emailVerified: user.emailVerified,
@@ -56,10 +56,37 @@ export const requireSessionUser = async (
   return active
 }
 
+// The authenticated session, attached to the request by requireAuthHook. Optional because only routes
+// under a plugin that registers the hook have it; getAuthUser narrows it for those that do.
+type AuthSession = { userId: string; sessionId: string }
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    authSession?: AuthSession
+  }
+}
+
+// Authentication as an onRequest middleware: register it once on an all-protected plugin
+// (`app.addHook('onRequest', requireAuthHook)`) instead of awaiting requireSessionUser inside every
+// handler. It runs before body parsing and rejects an unauthenticated request with 401 there, so a new
+// route added to the plugin is auth-gated by construction — impossible to forget.
+export const requireAuthHook: onRequestAsyncHookHandler = async (req) => {
+  req.authSession = await requireSessionUser(req)
+}
+
+// Read the session requireAuthHook resolved. A missing one means the route wasn't behind the hook — a
+// wiring bug, not a client error — so it throws an internal error rather than masquerading as a 401.
+export const getAuthUser = (req: FastifyRequest): AuthSession => {
+  if (req.authSession === undefined) {
+    throw new AppError('internal_error', 'Route is missing requireAuthHook.', 500)
+  }
+  return req.authSession
+}
+
 // Load the full user row for an id we already trust (from a session or a verified pending-MFA token).
 // A missing row means the session points at a deleted user — treat that as not-authenticated.
-export const loadUserOrThrow = async (userId: string): Promise<User> => {
-  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1)
+export const loadUserOrThrow = async (userId: string): Promise<UserRow> => {
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1)
   if (user === undefined) {
     throw unauthorized('not_authenticated', 'Sign in to continue.')
   }

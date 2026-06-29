@@ -10,7 +10,7 @@ import type {
 import { isoBase64URL } from '@simplewebauthn/server/helpers'
 import { eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { users } from '../db/schema.ts'
+import { usersTable } from '../db/schema.ts'
 import { env } from '../lib/env.ts'
 import {
   buildPasskeyAuthenticationOptions,
@@ -201,7 +201,7 @@ describe('passkey store', () => {
   let userId = ''
 
   beforeAll(async () => {
-    const [user] = await db.insert(users).values({ email: testEmail }).returning()
+    const [user] = await db.insert(usersTable).values({ email: testEmail }).returning()
     if (user === undefined) {
       throw new Error('failed to seed test user')
     }
@@ -209,7 +209,7 @@ describe('passkey store', () => {
   })
 
   afterAll(async () => {
-    await db.delete(users).where(eq(users.id, userId))
+    await db.delete(usersTable).where(eq(usersTable.id, userId))
   })
 
   test('a stored passkey round-trips and flips the user to enrolled', async () => {

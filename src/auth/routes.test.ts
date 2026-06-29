@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { eq, inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { AUTH_PROVIDERS, accounts, users } from '../db/schema.ts'
+import { AUTH_PROVIDERS, accountsTable, usersTable } from '../db/schema.ts'
 import { sentEmails } from '../lib/email.ts'
 import { buildServer } from '../server.ts'
 import { OAUTH_LINK_COOKIE, SESSION_COOKIE_NAME } from './cookies.ts'
@@ -41,7 +41,7 @@ const signupThenLogin = async (email: string): Promise<InjectResponse> => {
 
 afterAll(async () => {
   if (createdEmails.length > 0) {
-    await db.delete(users).where(inArray(users.email, createdEmails))
+    await db.delete(usersTable).where(inArray(usersTable.email, createdEmails))
   }
   await app.close()
 })
@@ -81,7 +81,7 @@ describe('POST /auth/signup', () => {
 
     expect(second.statusCode).toBe(200)
     // The UNIQUE index held: still exactly one user for this email, no second row from the retry.
-    const rows = await db.select().from(users).where(eq(users.email, email))
+    const rows = await db.select().from(usersTable).where(eq(usersTable.email, email))
     expect(rows).toHaveLength(1)
     // The owner is told via their inbox — not via the response — that the account already exists.
     const notice = sentEmails.slice(sentBefore).find((message) => message.to === email)
@@ -259,11 +259,11 @@ describe('GET /auth/me', () => {
   test('reports google once a google identity is linked', async () => {
     const email = uniqueEmail('me-google')
     const token = sessionTokenFrom(await signupThenLogin(email))
-    const [user] = await db.select().from(users).where(eq(users.email, email))
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.email, email))
     if (user === undefined) {
       throw new Error('expected the signed-up user to exist')
     }
-    await db.insert(accounts).values({
+    await db.insert(accountsTable).values({
       userId: user.id,
       provider: AUTH_PROVIDERS.google,
       providerUid: `google-${randomUUID()}`,

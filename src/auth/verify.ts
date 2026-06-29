@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import { emailVerificationTokens, users } from '../db/schema.ts'
+import { emailVerificationTokensTable, usersTable } from '../db/schema.ts'
 import { env } from '../lib/env.ts'
 import { badRequest } from '../lib/errors.ts'
 import { enqueueEmail } from '../queue/email-queue.ts'
@@ -15,7 +15,7 @@ type IssuedToken = { rawToken: string; expiresAt: Date }
 export const createEmailVerificationToken = async (userId: string): Promise<IssuedToken> => {
   const rawToken = generateToken()
   const expiresAt = new Date(Date.now() + VERIFICATION_TTL_MS)
-  await db.insert(emailVerificationTokens).values({
+  await db.insert(emailVerificationTokensTable).values({
     id: hashToken(rawToken),
     userId,
     expiresAt,
@@ -29,8 +29,8 @@ export const verifyEmailToken = async (rawToken: string): Promise<{ userId: stri
   const id = hashToken(rawToken)
   const [row] = await db
     .select()
-    .from(emailVerificationTokens)
-    .where(eq(emailVerificationTokens.id, id))
+    .from(emailVerificationTokensTable)
+    .where(eq(emailVerificationTokensTable.id, id))
     .limit(1)
 
   // Unknown and already-used look identical: a consumed token was deleted, so it has no row. That's
@@ -42,7 +42,7 @@ export const verifyEmailToken = async (rawToken: string): Promise<{ userId: stri
     )
   }
   if (row.expiresAt.getTime() <= Date.now()) {
-    await db.delete(emailVerificationTokens).where(eq(emailVerificationTokens.id, id))
+    await db.delete(emailVerificationTokensTable).where(eq(emailVerificationTokensTable.id, id))
     throw badRequest(
       'verification_expired',
       'This verification link has expired. Request a new one.',
@@ -51,8 +51,8 @@ export const verifyEmailToken = async (rawToken: string): Promise<{ userId: stri
 
   // Flip the flag and burn the token together, so a token can never be replayed after it succeeds.
   await db.transaction(async (tx) => {
-    await tx.update(users).set({ emailVerified: true }).where(eq(users.id, row.userId))
-    await tx.delete(emailVerificationTokens).where(eq(emailVerificationTokens.id, id))
+    await tx.update(usersTable).set({ emailVerified: true }).where(eq(usersTable.id, row.userId))
+    await tx.delete(emailVerificationTokensTable).where(eq(emailVerificationTokensTable.id, id))
   })
   return { userId: row.userId }
 }

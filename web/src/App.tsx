@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider } from './auth/AuthProvider'
 import { RequireAuth } from './auth/RequireAuth'
 import { DashboardPage } from './pages/DashboardPage'
+import { DocumentEditorPage } from './pages/DocumentEditorPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
 import { LoginPage } from './pages/LoginPage'
 import { ResetPasswordPage } from './pages/ResetPasswordPage'
@@ -32,6 +33,17 @@ export const App = () => (
           element={
             <RequireAuth>
               <SecurityPage />
+            </RequireAuth>
+          }
+        />
+        {/* The editor PAGE. Distinct from the REST resource path /documents/:id so a full page load /
+            refresh isn't proxied to the API (which would return JSON). The app owns /editor/:id; the
+            API owns /documents/:id. */}
+        <Route
+          path="/editor/:id"
+          element={
+            <RequireAuth>
+              <DocumentEditorPage />
             </RequireAuth>
           }
         />

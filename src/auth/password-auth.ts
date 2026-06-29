@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { isUniqueViolation } from '../db/errors.ts'
-import { AUTH_PROVIDERS, type User, accounts, users } from '../db/schema.ts'
+import { AUTH_PROVIDERS, type UserRow, accountsTable, usersTable } from '../db/schema.ts'
 import { unauthorized } from '../lib/errors.ts'
 import { hashPassword, isPasswordCorrect } from './password.ts'
 import { createSession } from './session.ts'
@@ -27,7 +27,7 @@ export const PASSWORD_LOGIN_STATUS = {
 // mfaRequired branch is only ever reached AFTER a correct password, so it can't become an oracle for
 // whether an email has 2FA.
 export type PasswordLoginResult =
-  | { status: typeof PASSWORD_LOGIN_STATUS.authenticated; user: User; session: CreatedSession }
+  | { status: typeof PASSWORD_LOGIN_STATUS.authenticated; user: UserRow; session: CreatedSession }
   | { status: typeof PASSWORD_LOGIN_STATUS.mfaRequired; userId: string }
 
 // Emails are matched case-insensitively: we store and look them up in one canonical (trimmed,
@@ -88,13 +88,13 @@ export const signupWithPassword = async (input: {
     // signup fail and roll back here — even under a double-submit race — so we get exactly one user.
     createdUserId = await db.transaction(async (tx) => {
       const [createdUser] = await tx
-        .insert(users)
+        .insert(usersTable)
         .values({ email, name: input.name ?? null })
         .returning()
       if (createdUser === undefined) {
         throw new Error('user insert returned no row')
       }
-      await tx.insert(accounts).values({
+      await tx.insert(accountsTable).values({
         userId: createdUser.id,
         provider: AUTH_PROVIDERS.password,
         providerUid: email,
@@ -132,8 +132,13 @@ export const loginWithPassword = async (input: {
   // hash; it must be indistinguishable from a nonexistent email — same decoy verify, same error.
   const [account] = await db
     .select()
-    .from(accounts)
-    .where(and(eq(accounts.provider, AUTH_PROVIDERS.password), eq(accounts.providerUid, email)))
+    .from(accountsTable)
+    .where(
+      and(
+        eq(accountsTable.provider, AUTH_PROVIDERS.password),
+        eq(accountsTable.providerUid, email),
+      ),
+    )
     .limit(1)
 
   if (account === undefined || account.passwordHash === null) {
@@ -158,7 +163,11 @@ export const loginWithPassword = async (input: {
   // we never adopt an id the client already holds, so a value an attacker planted pre-login can't
   // survive into the authenticated session.
   const session = await createSession({ userId: account.userId, ...input.context })
-  const [user] = await db.select().from(users).where(eq(users.id, account.userId)).limit(1)
+  const [user] = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.id, account.userId))
+    .limit(1)
   if (user === undefined) {
     throw new Error('account references a missing user')
   }
