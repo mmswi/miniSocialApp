@@ -247,6 +247,80 @@ export const documentUpdatesTable = pgTable(
   (t) => [index('document_updates_doc_seq_idx').on(t.documentId, t.seq)],
 )
 
+/*
+ * Teams — permission groups that share documents (step 4)
+ *
+ *   users ──1──<── team_members >──many──1── teams   (a user is in many teams; a team has many members)
+ *
+ * A team is a named group with ONE access level (read | write | delete) — the ceiling on what its
+ * members may do to a document shared into it. Sharing documents into teams is a later milestone; this
+ * slice just creates teams and their memberships. A member also carries a ROLE (owner | admin | member)
+ * that governs the TEAM itself — who may invite, rename, or delete it — orthogonal to the access level.
+ *
+ * Ownership lives ONLY in the memberships: a team is "owned" by whoever holds an `owner`-role row, not
+ * by `teams.created_by_id`. That column is a historical footnote (set null when the creator is deleted),
+ * so a team outlives its creator as long as some owner-role member remains.
+ */
+
+// A member's authority OVER THE TEAM (invite / rename / delete) — distinct from the access level, which
+// is the team's authority over documents. Named once here so the pgEnum, the column, and the rank map in
+// teams/authz.ts all derive from these; a typo'd 'admn' anywhere is then a compile error, not a silent
+// mis-grant.
+export const TEAM_ROLES = { owner: 'owner', admin: 'admin', member: 'member' } as const
+export type TeamRole = (typeof TEAM_ROLES)[keyof typeof TEAM_ROLES]
+
+export const teamRoleEnum = pgEnum('team_role', [
+  TEAM_ROLES.owner,
+  TEAM_ROLES.admin,
+  TEAM_ROLES.member,
+])
+
+// The team's ceiling on what its members may do to a shared document: read ⊂ write ⊂ delete, an ordered
+// superset chain. Not enforced by anything in this slice (it only bites when documents are shared into
+// teams, a later milestone); stored now so every team is created with its level from day one.
+export const TEAM_ACCESS_LEVELS = { read: 'read', write: 'write', delete: 'delete' } as const
+export type TeamAccessLevel = (typeof TEAM_ACCESS_LEVELS)[keyof typeof TEAM_ACCESS_LEVELS]
+
+export const teamAccessLevelEnum = pgEnum('team_access_level', [
+  TEAM_ACCESS_LEVELS.read,
+  TEAM_ACCESS_LEVELS.write,
+  TEAM_ACCESS_LEVELS.delete,
+])
+
+export const teamsTable = pgTable('teams', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: text('name').notNull(),
+  accessLevel: teamAccessLevelEnum('access_level').notNull().default(TEAM_ACCESS_LEVELS.read),
+  // Who created the team — a footnote, NOT the authorization (that is an `owner`-role membership row).
+  // set null, where every other user FK in this file cascades: deleting the creator must not delete a
+  // team other people are still in, so the team survives with created_by_id nulled.
+  createdById: uuid('created_by_id').references(() => usersTable.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const teamMembersTable = pgTable(
+  'team_members',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teamsTable.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
+    role: teamRoleEnum('role').notNull().default(TEAM_ROLES.member),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // One membership per (team, user): a user can't be in a team twice. The DB is the race-safe arbiter
+    // (a duplicate insert is a 23505 the data layer catches — not a check-then-insert two requests race).
+    uniqueIndex('team_members_team_user_unique').on(t.teamId, t.userId),
+    // "Which teams am I in?" — the sidebar's list — scans by user.
+    index('team_members_user_idx').on(t.userId),
+  ],
+)
+
 export type UserRow = typeof usersTable.$inferSelect
 export type NewUserRow = typeof usersTable.$inferInsert
 export type AccountRow = typeof accountsTable.$inferSelect
@@ -258,3 +332,7 @@ export type RecoveryCodeRow = typeof recoveryCodesTable.$inferSelect
 export type DocumentRow = typeof documentsTable.$inferSelect
 export type NewDocumentRow = typeof documentsTable.$inferInsert
 export type DocumentUpdateRow = typeof documentUpdatesTable.$inferSelect
+export type TeamRow = typeof teamsTable.$inferSelect
+export type NewTeamRow = typeof teamsTable.$inferInsert
+export type TeamMemberRow = typeof teamMembersTable.$inferSelect
+export type NewTeamMemberRow = typeof teamMembersTable.$inferInsert
