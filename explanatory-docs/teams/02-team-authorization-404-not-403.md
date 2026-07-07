@@ -164,7 +164,7 @@ The role lookup, on every guarded request. Authorization is never cached here; i
 
 **What's handed on?**
 
-`requireTeamRole` — the one guard the member-management routes (a later pass) call on nearly every mutation — and `getTeamForMember`, which doc 03's `GET /teams/:teamId` uses directly.
+`requireTeamRole` — the one guard the member-management routes (a later pass) call on nearly every mutation — and `getTeamForMember`, which [doc 03](./03-creating-a-team.md)'s `GET /teams/:teamId` uses directly.
 
 ---
 
@@ -174,7 +174,7 @@ Two limits worth stating plainly.
 
 `requireTeamRole` is built and unit-tested here, but **none of this slice's three routes actually call it yet** — creating, listing, and viewing a team don't gate on rank. It exists now because the `404`-vs-`403` split *is* milestone 2's whole point, and its first real consumer (removing a member, changing a role) is the very next pass. Building and testing the seam now means that pass adds routes, not security primitives.
 
-And the access level from doc 01 still isn't enforced by anything — it can't be until documents can be shared into teams. This milestone is about *who is in a team and how much they outrank*, not yet *what a team can do to a document*.
+And the access level from [doc 01](./01-the-teams-data-model.md) still isn't enforced by anything — it can't be until documents can be shared into teams. This milestone is about *who is in a team and how much they outrank*, not yet *what a team can do to a document*.
 
 The whole thing in three beats:
 

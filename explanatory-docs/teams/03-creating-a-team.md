@@ -47,7 +47,7 @@ Creating a team means writing two rows:
 1. the `teams` row itself, and
 2. a `team_members` row seating Mara as its `owner`.
 
-Remember the rule from doc 01: **ownership is a membership row, not the `created_by_id` column.** So a team without an owner-membership isn't "a team with a missing detail" — it's a team nobody can manage.
+Remember the rule from [doc 01](./01-the-teams-data-model.md): **ownership is a membership row, not the `created_by_id` column.** So a team without an owner-membership isn't "a team with a missing detail" — it's a team nobody can manage.
 
 Here's the version you'd write without thinking:
 
@@ -110,7 +110,7 @@ Return the team. The transaction commits *here*, at the end — both rows land a
 
 If the membership insert had thrown, the `return` never runs, the transaction rolls back, and the `teams` row you saw a line earlier is erased. No ghost. The invariant "a team always has an owner" isn't a thing we hope holds — it's a thing the transaction *makes* hold.
 
-One small detail: `accessLevel: undefined`. Passing `undefined` omits the column entirely, so the database's own `DEFAULT 'read'` applies (that's the migration line from doc 01). Mara didn't pick a level, so she gets the safest one, decided in exactly one place — the schema.
+One small detail: `accessLevel: undefined`. Passing `undefined` omits the column entirely, so the database's own `DEFAULT 'read'` applies (that's the migration line from [doc 01](./01-the-teams-data-model.md)). Mara didn't pick a level, so she gets the safest one, decided in exactly one place — the schema.
 
 The flow, end to end:
 
@@ -130,7 +130,7 @@ The flow, end to end:
 
 ## Seeing it back: the list and the single team
 
-Two read routes round out the slice, and both lean on work from doc 02.
+Two read routes round out the slice, and both lean on work from [doc 02](./02-team-authorization-404-not-403.md).
 
 `GET /teams` is the sidebar. It returns the teams Mara is a member of — and the membership join *is* the filter, so a team she isn't in simply can't appear:
 
@@ -144,7 +144,7 @@ Two read routes round out the slice, and both lean on work from doc 02.
 
 It starts *from* her memberships and joins out to the teams, newest-touched first. Each row carries her role in that team, so the client never has to ask "and what am I here?" separately.
 
-`GET /teams/:teamId` is one team. It calls `getTeamForMember` — the join-as-authorization query from doc 02 — and turns a missing row into a `404`:
+`GET /teams/:teamId` is one team. It calls `getTeamForMember` — the join-as-authorization query from [doc 02](./02-team-authorization-404-not-403.md) — and turns a missing row into a `404`:
 
 ```ts
 // src/teams/routes.ts
@@ -156,7 +156,7 @@ const { role, ...team } = membership
 return { team, role }
 ```
 
-A stranger asking for *Design crew* by id matches no row and gets a `404` — the same answer as a team that never existed. No oracle. (That's the rule doc 02 is entirely about; here it's just... used.)
+A stranger asking for *Design crew* by id matches no row and gets a `404` — the same answer as a team that never existed. No oracle. (That's the rule [doc 02](./02-team-authorization-404-not-403.md) is entirely about; here it's just... used.)
 
 The `role` is split back out of the joined row so the client receives a clean team object plus, separately, the caller's own role — which will later decide whether the page shows a "Delete team" button or hides it.
 

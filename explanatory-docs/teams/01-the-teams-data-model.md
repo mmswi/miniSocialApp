@@ -152,7 +152,7 @@ Instead:
 
 That is why `created_by_id` is the one user-reference in this whole schema that does **not** cascade-delete. Every other one (`team_members.user_id`, a document's owner) says "if the user goes, this row goes." This one says "if the user goes, forget who made it, but keep the team."
 
-Hold that thought — it comes back the moment we actually create a team (doc 03), where the creator is seated as the first `owner` in the same breath as the team itself.
+Hold that thought — it comes back the moment we actually create a team ([doc 03](./03-creating-a-team.md)), where the creator is seated as the first `owner` in the same breath as the team itself.
 
 ---
 
@@ -334,7 +334,7 @@ Nothing yet — this milestone is only the shape. Reads and writes arrive in doc
 
 **What's handed on?**
 
-Two tables and two orthogonal enums that the authorization rule (doc 02) and the create flow (doc 03) both build on.
+Two tables and two orthogonal enums that the authorization rule ([doc 02](./02-team-authorization-404-not-403.md)) and the create flow ([doc 03](./03-creating-a-team.md)) both build on.
 
 ---
 
