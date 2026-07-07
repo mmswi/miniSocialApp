@@ -2,7 +2,7 @@
 
 > Increment: step 4 · M1 — the teams data model.
 > Files: `src/db/schema.ts` (`teams`, `team_members`, the `team_role` and `team_access_level` enums),
-> `drizzle/0004_wise_warbird.sql`.
+> `drizzle/0004_teams.sql`.
 
 "Team" is a word that means ten different things.
 
@@ -160,7 +160,7 @@ Hold that thought — it comes back the moment we actually create a team ([doc 0
 
 Everything above is TypeScript. But Postgres doesn't speak TypeScript.
 
-So `drizzle-kit generate` reads the schema and writes the equivalent **SQL** — the language the database actually runs. That file is `drizzle/0004_wise_warbird.sql`. Running `drizzle-kit migrate` feeds it to Postgres once, and the tables exist.
+So `drizzle-kit generate` reads the schema and writes the equivalent **SQL** — the language the database actually runs. That file is `drizzle/0004_teams.sql`. Running `drizzle-kit migrate` feeds it to Postgres once, and the tables exist.
 
 If you don't know SQL, that file looks like a wall. It isn't. It is six plain statements. Here it is, whole, then one piece at a time.
 
