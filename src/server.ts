@@ -15,6 +15,7 @@ import { scheduleCompactionSweep } from './queue/compaction-queue.ts'
 import { createCompactionWorker } from './queue/compaction-worker.ts'
 import { createEmailWorker } from './queue/email-worker.ts'
 import { syncRoutes } from './sync/ws-routes.ts'
+import { teamRoutes } from './teams/routes.ts'
 
 type BuildServerOptions = { enableRateLimit?: boolean }
 
@@ -77,6 +78,10 @@ export const buildServer = (options: BuildServerOptions = {}): FastifyInstance =
   // Document CRUD lives under /documents — owner-scoped list/create/get/delete. The realtime editing
   // of a document's contents is the ws sync layer (step 2 M2), not these REST routes.
   app.register(documentRoutes, { prefix: '/documents' })
+
+  // Teams live under /teams — create/list/view a team (owner-seated on create). Members, invites, and
+  // sharing documents into teams arrive in later milestones; this slice is team creation itself.
+  app.register(teamRoutes, { prefix: '/teams' })
 
   // The realtime sync endpoint, /documents/:id/sync (ws). Auth-on-upgrade reuses the same owner check
   // as the REST routes. Declares its full path, so it's registered at the root, not under a prefix.
