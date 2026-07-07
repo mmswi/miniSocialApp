@@ -453,6 +453,63 @@ That's the whole distinction:
 
 ---
 
+## The other two joins: RIGHT and FULL
+
+INNER and LEFT are the two you'll write almost every day. But there are four in total — so let me close the set, and clear up a word while I'm at it.
+
+**"OUTER" is noise.** You'll see `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, `FULL OUTER JOIN`. The `OUTER` adds nothing — `LEFT JOIN` and `LEFT OUTER JOIN` are the exact same thing. So "right join" and "outer join" aren't two separate answers; `OUTER` is just the formal middle name of joins you already have. Four joins, one word you can ignore.
+
+Picture two overlapping circles — `users` on the left, `team_members` on the right. The overlap is the rows that match on the `ON` condition. Each join keeps a different region:
+
+    INNER JOIN  → just the overlap             (only rows matched on both sides)
+    LEFT JOIN   → whole LEFT circle + overlap   (all users; NULL where no membership)
+    RIGHT JOIN  → whole RIGHT circle + overlap  (all memberships; NULL where no user)
+    FULL JOIN   → both circles, whole           (everything; NULL wherever either side is missing)
+
+`RIGHT JOIN` is the mirror of `LEFT`: keep every row from the *right* grid, NULL-fill the left. `FULL JOIN` keeps everything from *both* — a user with no membership comes back with a NULL role, and a membership with no matching user comes back with a NULL name.
+
+Now the honest part, and it's the lesson worth keeping. On *this* pair of grids, RIGHT and FULL are secretly the same as joins you've already seen — and the foreign key is why.
+
+Remember: `team_members.user_id` REFERENCES `users.id`. A membership **can never** point at a user who doesn't exist — the database forbids it. So the part of the right circle sticking out past the overlap — memberships with no user — is always empty.
+
+Watch what that does. `RIGHT JOIN` keeps all memberships:
+
+```sql
+SELECT users.name, team_members.role
+FROM users
+RIGHT JOIN team_members ON team_members.user_id = users.id;
+```
+
+But every membership already has a real user, so nothing gets NULL-filled — you get exactly the matched rows. **RIGHT JOIN here collapses to INNER JOIN.** Same two rows, Mara and Sam:
+
+    name | role
+    -----+--------
+    Sam  | member
+    Mara | owner
+
+And `FULL JOIN` here collapses to `LEFT JOIN`. The only unmatched rows that exist are users without a membership (Theo, and a nameless account), so FULL adds nothing beyond what LEFT already kept — the same four rows, Theo and the nameless one with a NULL role.
+
+That's the real reason I reached for LEFT and skipped RIGHT earlier. On this schema the gap only runs one way:
+
+    a user can have no team          → LEFT JOIN surfaces it
+    a membership can't have no user  → the foreign key already made that impossible
+
+LEFT shows the gap that can actually happen. RIGHT would go looking for a gap the foreign key has ruled out.
+
+RIGHT and FULL earn their keep when *both* sides can have unmatched rows — two independent lists you're reconciling, wanting to see what each has that the other is missing. With a foreign key in play, that's usually not your situation, so you'll live in INNER and LEFT.
+
+And a practical note: almost nobody writes `RIGHT JOIN` anyway. `A RIGHT JOIN B` is just `B LEFT JOIN A` with the grids swapped, and since we read left-to-right, people flip it so the "keep them all" grid comes first. So the family quietly narrows back down to the two you started with.
+
+(There's also `CROSS JOIN` — every left row paired with every right row, no `ON` at all. It builds combinations rather than matching rows, a different job entirely; you'll rarely reach for it.)
+
+The one model that covers all of them:
+
+    a JOIN matches rows across two grids;
+    the word in front only decides which UNMATCHED rows survive —
+    left, right, both, or neither.
+
+---
+
 ## Counting: GROUP BY
 
 One more kind of question: not "which rows" but "how many," per something.
