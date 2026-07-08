@@ -198,3 +198,41 @@ export const API_renameDocument = (
 
 export const API_deleteDocument = (id: string): Promise<null> =>
   request(`/documents/${id}`, { method: 'DELETE' })
+
+// --- teams ---
+
+// The team's access level (its ceiling over shared documents) and a member's role. The frontend's OWN
+// copy of the backend's team_access_level / team_role enums — importing the server's from db/schema.ts
+// would drag drizzle-orm into the client bundle. The CLIENT_ prefix marks these as independent mirrors
+// of one wire contract (not a shared source), and naming each value once keeps call sites off bare
+// 'read'/'owner' strings a typo could break.
+export const CLIENT_TEAM_ACCESS_LEVELS = { read: 'read', write: 'write', delete: 'delete' } as const
+export type ClientTeamAccessLevel =
+  (typeof CLIENT_TEAM_ACCESS_LEVELS)[keyof typeof CLIENT_TEAM_ACCESS_LEVELS]
+
+export const CLIENT_TEAM_ROLES = { owner: 'owner', admin: 'admin', member: 'member' } as const
+export type ClientTeamRole = (typeof CLIENT_TEAM_ROLES)[keyof typeof CLIENT_TEAM_ROLES]
+
+// A team as the client holds it — the server's TeamSummary wire shape (no created_by_id). Dates arrive
+// as ISO strings over JSON. Named distinctly from the server types (TeamSummary/TeamWithRole) so nothing
+// in web/ can auto-import the wrong one across the boundary — same reason as DocumentMeta.
+export type TeamMeta = {
+  id: string
+  name: string
+  accessLevel: ClientTeamAccessLevel
+  createdAt: string
+  updatedAt: string
+}
+
+// A team in the list: the summary plus THIS user's role in it (the server joins the role in per caller).
+export type TeamListItem = TeamMeta & { role: ClientTeamRole }
+
+export const API_listTeams = (): Promise<{ teams: TeamListItem[] }> => request('/teams')
+
+// No access level sends just the name, so the server applies its default ('read', the safest ceiling).
+// The caller becomes the new team's owner server-side, so the response is a plain TeamMeta (no role).
+export const API_createTeam = (input: {
+  name: string
+  accessLevel?: ClientTeamAccessLevel
+}): Promise<{ team: TeamMeta }> =>
+  request('/teams', { method: 'POST', body: JSON.stringify(input) })

@@ -17,6 +17,9 @@ export default defineConfig({
       // ws: true so the editor's WebSocket upgrade (/documents/:id/sync) is proxied too, not just the
       // REST calls under /documents. Same origin in the browser → the session cookie rides the upgrade.
       '/documents': { target: 'http://localhost:3001', ws: true },
+      // Teams REST (create/list/view). When a single-team app page arrives it must live at /team/:id
+      // (singular), so it never prefix-matches this proxied /teams path and get forwarded to the API.
+      '/teams': 'http://localhost:3001',
       '/health': 'http://localhost:3001',
       '/ready': 'http://localhost:3001',
     },
