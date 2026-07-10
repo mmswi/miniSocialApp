@@ -1,9 +1,23 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import { getAuthUser, parseOrThrow, requireAuthHook } from '../auth/route-helpers.ts'
-import { TEAM_ACCESS_LEVELS } from '../db/schema.ts'
-import { notFound } from '../lib/errors.ts'
-import { createTeam, getTeamForMember, listTeamsForUser } from './teams.ts'
+import { normalizeEmail } from '../auth/password-auth.ts'
+import {
+  getAuthUser,
+  loadUserOrThrow,
+  parseOrThrow,
+  requireAuthHook,
+} from '../auth/route-helpers.ts'
+import { TEAM_ACCESS_LEVELS, TEAM_ROLES } from '../db/schema.ts'
+import { forbidden, notFound } from '../lib/errors.ts'
+import { requireTeamRole } from './authz.ts'
+import {
+  acceptTeamInvite,
+  createTeamInvite,
+  listTeamInvites,
+  revokeTeamInvite,
+  sendTeamInviteEmail,
+} from './invites.ts'
+import { createTeam, getTeamForMember, getTeamNameById, listTeamsForUser } from './teams.ts'
 
 const createTeamBody = z.object({
   name: z.string().trim().min(1).max(100),
@@ -16,6 +30,27 @@ const createTeamBody = z.object({
 
 const teamIdParams = z.object({
   teamId: z.string().uuid(),
+})
+
+// Only member and admin are invitable — never owner (a team gains an owner by promotion, never straight
+// from an invite). Named constants, not bare strings, so the enum stays the single source of truth — same
+// idiom as createTeamBody's accessLevel.
+const createInviteBody = z.object({
+  email: z.string().email(),
+  role: z.enum([TEAM_ROLES.admin, TEAM_ROLES.member]),
+})
+
+// The raw invite token, straight from the emailed link's query string. It's the capability, so it's opaque
+// here — validated only as a non-empty string; invites.ts hashes it and decides valid/expired/mismatch.
+const acceptInviteBody = z.object({
+  token: z.string().min(1),
+})
+
+// The invite's id is its token hash (from the admin listing) — a string, not a uuid, since it's a sha256
+// hex digest, not a generated row id.
+const inviteIdParams = z.object({
+  teamId: z.string().uuid(),
+  inviteId: z.string().min(1),
 })
 
 // Registered under /teams. Same shape as documentRoutes: authentication is one onRequest hook for the
@@ -56,5 +91,78 @@ export const teamRoutes = async (app: FastifyInstance): Promise<void> => {
     // TeamPage later shows). role is split out of the joined row so `team` is a clean TeamSummary.
     const { role, ...team } = membership
     return { team, role }
+  })
+
+  // Invite an email to the team. Admin+ may invite at all; only an owner may confer 'admin' (an admin can't
+  // mint a peer who could then remove them). requireTeamRole gives the null→404 / under-rank→403 split for
+  // free AND hands back the caller's own role — exactly what the owner-for-admin rule needs, no second read.
+  app.post('/:teamId/invites', async (req, reply) => {
+    const { userId } = getAuthUser(req)
+    const { teamId } = parseOrThrow(teamIdParams, req.params)
+    const input = parseOrThrow(createInviteBody, req.body)
+    const callerRole = await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.admin })
+    if (input.role === TEAM_ROLES.admin && callerRole !== TEAM_ROLES.owner) {
+      throw forbidden('invite_admin_requires_owner', 'Only an owner can invite an admin.')
+    }
+    // Name for the email body. The guard already proved the team exists and the caller may act on it, so a
+    // null here is only a delete-mid-request race — reported as the same 404 a non-member would get.
+    const teamName = await getTeamNameById(teamId)
+    if (teamName === null) {
+      throw notFound('team_not_found', 'Team not found.')
+    }
+    // One normalization point per request: lowercased so the unique(team, email) key and the accept-time
+    // match are case-insensitive, and so we email the same address we stored.
+    const email = normalizeEmail(input.email)
+    const { rawToken, expiresAt } = await createTeamInvite({
+      teamId,
+      email,
+      role: input.role,
+      invitedById: userId,
+    })
+    await sendTeamInviteEmail({ to: email, teamName, rawToken })
+    // The raw token is never returned — it lives only in the email. The client gets the pending-invite
+    // summary it needs to render the row it just created; the token hash id comes back on the list read.
+    return reply.code(201).send({ invite: { email, role: input.role, expiresAt } })
+  })
+
+  // The team's outstanding invites — the admin's pending list. Admin+ only; a plain member can't see who's
+  // been invited.
+  app.get('/:teamId/invites', async (req) => {
+    const { userId } = getAuthUser(req)
+    const { teamId } = parseOrThrow(teamIdParams, req.params)
+    await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.admin })
+    const invites = await listTeamInvites(teamId)
+    return { invites }
+  })
+
+  // Revoke an outstanding invite by its id (the token hash from the listing). Admin+ only. teamId scopes the
+  // delete, so revoking is confined to invites of a team the caller actually administers.
+  app.delete('/:teamId/invites/:inviteId', async (req, reply) => {
+    const { userId } = getAuthUser(req)
+    const { teamId, inviteId } = parseOrThrow(inviteIdParams, req.params)
+    await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.admin })
+    const revoked = await revokeTeamInvite({ teamId, inviteId })
+    if (!revoked) {
+      throw notFound('invite_not_found', 'Invite not found.')
+    }
+    return reply.code(204).send()
+  })
+
+  // Accept an invite: the caller redeems a raw token to join the team it names. Authed (this whole plugin
+  // is), so we know who is accepting; their stored email must match the address the invite was sent to.
+  // Note the path is static `/invites/accept`, a sibling of the parametric `/:teamId/...` routes — Fastify
+  // matches the static segment first, so there's no clash with a team id that happened to read "invites".
+  app.post('/invites/accept', async (req) => {
+    const { userId } = getAuthUser(req)
+    const input = parseOrThrow(acceptInviteBody, req.body)
+    // The caller's own email (lowercased at signup) is the identity the invite is bound to — load it here
+    // rather than trusting anything from the request body.
+    const user = await loadUserOrThrow(userId)
+    const team = await acceptTeamInvite({
+      rawToken: input.token,
+      userId,
+      sessionEmail: user.email,
+    })
+    return { team }
   })
 }

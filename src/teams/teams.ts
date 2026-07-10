@@ -100,3 +100,16 @@ export const getTeamForMember = async (input: {
     .limit(1)
   return row === undefined ? null : row
 }
+
+// Just a team's name, by id — no membership scoping. The invite route calls this AFTER requireTeamRole has
+// already proven the caller may act on this team, purely to fill in the email's subject/body; it is not an
+// authorization check. Null only if the team was deleted between the guard and this read, which the route
+// answers as a 404.
+export const getTeamNameById = async (teamId: string): Promise<string | null> => {
+  const [row] = await db
+    .select({ name: teamsTable.name })
+    .from(teamsTable)
+    .where(eq(teamsTable.id, teamId))
+    .limit(1)
+  return row === undefined ? null : row.name
+}

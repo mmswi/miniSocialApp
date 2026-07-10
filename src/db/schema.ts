@@ -321,6 +321,41 @@ export const teamMembersTable = pgTable(
   ],
 )
 
+// A pending invitation for an email to join a team at a given role. Modeled on email_verification_tokens:
+// the PK is sha256(rawToken), so only the hash lives at rest and a DB leak yields no usable invite link —
+// the raw token rides in the emailed URL and is the capability. Scoped to (team, email, role): accepting
+// requires the caller's session email to match `email`, so a leaked link can't seat a different account.
+export const teamInvitesTable = pgTable(
+  'team_invites',
+  {
+    // sha256(rawToken); the invite link carries the raw token, exactly like email_verification_tokens.
+    id: text('id').primaryKey(),
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teamsTable.id, { onDelete: 'cascade' }),
+    // Lowercased in code before insert so the unique(team, email) key and the accept-time match are
+    // case-insensitive — Alice@x.com and alice@x.com are one invitee, not two.
+    email: text('email').notNull(),
+    // The role the invitee gets on accept. Never 'owner' (the route rejects that); a team gains owners
+    // only through promotion, never an invite. Stored as the same enum so a bad value can't be inserted.
+    role: teamRoleEnum('role').notNull(),
+    // Who sent it — cascade, so deleting that user clears their outstanding invites (unlike teams, an
+    // invite has no reason to outlive its sender).
+    invitedById: uuid('invited_by_id')
+      .notNull()
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // At most one live invite per (team, email): re-inviting is delete-then-insert, which also rotates the
+    // token so the previous link stops working. The unique key is the DB's race-safe guarantee of that.
+    uniqueIndex('team_invites_team_email_unique').on(t.teamId, t.email),
+    // "Which invites are outstanding for this team?" — the admin's pending list — scans by team.
+    index('team_invites_team_idx').on(t.teamId),
+  ],
+)
+
 export type UserRow = typeof usersTable.$inferSelect
 export type NewUserRow = typeof usersTable.$inferInsert
 export type AccountRow = typeof accountsTable.$inferSelect
@@ -336,3 +371,5 @@ export type TeamRow = typeof teamsTable.$inferSelect
 export type NewTeamRow = typeof teamsTable.$inferInsert
 export type TeamMemberRow = typeof teamMembersTable.$inferSelect
 export type NewTeamMemberRow = typeof teamMembersTable.$inferInsert
+export type TeamInviteRow = typeof teamInvitesTable.$inferSelect
+export type NewTeamInviteRow = typeof teamInvitesTable.$inferInsert
