@@ -6,6 +6,7 @@ import { SelectField } from '../components/SelectField'
 import { TextField } from '../components/TextField'
 import {
   API_createDocument,
+  API_createInvite,
   API_createTeam,
   API_deleteDocument,
   API_listDocuments,
@@ -13,7 +14,10 @@ import {
   ApiError,
   CLIENT_AUTH_PROVIDERS,
   CLIENT_TEAM_ACCESS_LEVELS,
+  CLIENT_TEAM_ROLES,
+  type ClientInvitableRole,
   type ClientTeamAccessLevel,
+  type ClientTeamRole,
   type DocumentMeta,
   type TeamListItem,
 } from '../lib/api'
@@ -41,6 +45,32 @@ const toTeamAccessLevel = (value: string): ClientTeamAccessLevel =>
   teamAccessLevelOptions.find((option) => option.value === value)?.value ??
   CLIENT_TEAM_ACCESS_LEVELS.read
 
+// The role choices in the invite form depend on who is asking: only an owner may confer admin (the
+// server 403s otherwise), so an admin caller never even sees the option that would fail.
+const inviteRoleOptions = (
+  callerRole: ClientTeamRole,
+): { value: ClientInvitableRole; label: string }[] => {
+  const memberOption = {
+    value: CLIENT_TEAM_ROLES.member,
+    label: 'Member — can view and use shared documents',
+  }
+  const adminOption = {
+    value: CLIENT_TEAM_ROLES.admin,
+    label: 'Admin — can also manage members and invites',
+  }
+  return callerRole === CLIENT_TEAM_ROLES.owner ? [memberOption, adminOption] : [memberOption]
+}
+
+// Same boundary-narrowing as toTeamAccessLevel: anything that isn't exactly admin falls back to member,
+// the least-privileged invitable role.
+const toInvitableRole = (value: string): ClientInvitableRole =>
+  value === CLIENT_TEAM_ROLES.admin ? CLIENT_TEAM_ROLES.admin : CLIENT_TEAM_ROLES.member
+
+// Inviting is an admin-and-up action; a plain member's row hides the control entirely (role-gating by
+// hiding, per the plan) rather than offering a button that would only 403.
+const canInviteToTeam = (role: ClientTeamRole): boolean =>
+  role === CLIENT_TEAM_ROLES.owner || role === CLIENT_TEAM_ROLES.admin
+
 export const DashboardPage = () => {
   const { user, signOut } = useAuth()
   const navigate = useNavigate()
@@ -62,6 +92,16 @@ export const DashboardPage = () => {
   )
   const [isCreatingTeam, setIsCreatingTeam] = useState(false)
   const [teamError, setTeamError] = useState<string | null>(null)
+
+  // The invite form is an inline expand under its team row (house style: no modal), one row at a time —
+  // the state is simply WHICH team's form is open. The sent note is kept separately, keyed by team, so
+  // the confirmation survives the form collapsing after a successful send.
+  const [inviteFormTeamId, setInviteFormTeamId] = useState<string | null>(null)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteRole, setInviteRole] = useState<ClientInvitableRole>(CLIENT_TEAM_ROLES.member)
+  const [isSendingInvite, setIsSendingInvite] = useState(false)
+  const [inviteError, setInviteError] = useState<string | null>(null)
+  const [inviteSent, setInviteSent] = useState<{ teamId: string; email: string } | null>(null)
 
   const loadDocuments = useCallback(async () => {
     setDocumentsStatus('loading')
@@ -137,6 +177,44 @@ export const DashboardPage = () => {
     }
   }
 
+  // Moving the open form — to another row, or away entirely (null) — is also its reset, mirroring
+  // closeTeamForm: email, role, and any error clear, so every opening starts clean.
+  const moveInviteForm = (teamId: string | null) => {
+    setInviteFormTeamId(teamId)
+    setInviteEmail('')
+    setInviteRole(CLIENT_TEAM_ROLES.member)
+    setInviteError(null)
+  }
+
+  const openInviteForm = (teamId: string) => {
+    moveInviteForm(teamId)
+    // A stale "sent" note under another row would read as this send's result — clear it on open.
+    setInviteSent(null)
+  }
+
+  const onSendInvite = async (event: SyntheticEvent<HTMLFormElement>, teamId: string) => {
+    event.preventDefault()
+    const email = inviteEmail.trim()
+    if (email === '') {
+      return
+    }
+    setInviteError(null)
+    setIsSendingInvite(true)
+    try {
+      const { invite } = await API_createInvite(teamId, { email, role: inviteRole })
+      // The invite now exists only in the recipient's inbox. Confirm with the address the server echoed
+      // (the normalized one it stored and emailed), then collapse the form.
+      setInviteSent({ teamId, email: invite.email })
+      moveInviteForm(null)
+    } catch (caught) {
+      setInviteError(
+        caught instanceof ApiError ? caught.message : 'Something went wrong. Please try again.',
+      )
+    } finally {
+      setIsSendingInvite(false)
+    }
+  }
+
   const onSignOut = async () => {
     await signOut()
     navigate('/login')
@@ -153,6 +231,7 @@ export const DashboardPage = () => {
   const hasNoDocuments = documentsStatus === 'ready' && documents.length === 0
   const hasNoTeams = teamsStatus === 'ready' && teams.length === 0
   const canSubmitTeam = !isCreatingTeam && teamName.trim() !== ''
+  const canSendInvite = !isSendingInvite && inviteEmail.trim() !== ''
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-10">
@@ -290,16 +369,74 @@ export const DashboardPage = () => {
 
           {teamsStatus === 'ready' && teams.length > 0 ? (
             <ul className="divide-y divide-slate-100">
-              {teams.map((team) => (
-                <li key={team.id} className="flex items-center justify-between py-3">
-                  <div>
-                    <p className="font-medium">{team.name}</p>
-                    <p className="text-xs text-slate-500">
-                      {team.role} · {team.accessLevel} access
-                    </p>
-                  </div>
-                </li>
-              ))}
+              {teams.map((team) => {
+                const isInviteFormOpen = inviteFormTeamId === team.id
+                const sentToEmail =
+                  inviteSent !== null && inviteSent.teamId === team.id ? inviteSent.email : null
+                return (
+                  <li key={team.id} className="py-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium">{team.name}</p>
+                        <p className="text-xs text-slate-500">
+                          {team.role} · {team.accessLevel} access
+                        </p>
+                      </div>
+                      {canInviteToTeam(team.role) ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            isInviteFormOpen ? moveInviteForm(null) : openInviteForm(team.id)
+                          }
+                          className="text-sm font-medium text-slate-600 hover:text-slate-900"
+                        >
+                          {isInviteFormOpen ? 'Cancel' : 'Invite'}
+                        </button>
+                      ) : null}
+                    </div>
+
+                    {sentToEmail !== null ? (
+                      <p className="mt-2 rounded-md bg-green-50 px-3 py-2 text-sm text-green-800">
+                        Invite sent to {sentToEmail}.
+                      </p>
+                    ) : null}
+
+                    {isInviteFormOpen ? (
+                      <form
+                        onSubmit={(event) => void onSendInvite(event, team.id)}
+                        className="mt-3 space-y-3 rounded-md bg-slate-50 p-3"
+                      >
+                        <TextField
+                          label="Email"
+                          type="email"
+                          placeholder="colleague@example.com"
+                          value={inviteEmail}
+                          onChange={(event) => setInviteEmail(event.target.value)}
+                        />
+                        <SelectField
+                          label="Role"
+                          value={inviteRole}
+                          onChange={(event) => setInviteRole(toInvitableRole(event.target.value))}
+                        >
+                          {inviteRoleOptions(team.role).map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </SelectField>
+                        {inviteError ? (
+                          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+                            {inviteError}
+                          </p>
+                        ) : null}
+                        <Button type="submit" disabled={!canSendInvite}>
+                          {isSendingInvite ? 'Sending…' : 'Send invite'}
+                        </Button>
+                      </form>
+                    ) : null}
+                  </li>
+                )
+              })}
             </ul>
           ) : null}
         </div>

@@ -55,6 +55,14 @@ const stubApi = (input: {
       if (url.includes('/auth/me')) {
         return jsonResponse(me)
       }
+      if (url.includes('/invites') && method === 'POST') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { email: string; role: string }
+        // Echo like the server: the normalized address it stored, never the raw token.
+        return jsonResponse(
+          { invite: { email: body.email, role: body.role, expiresAt: '2026-07-16T00:00:00.000Z' } },
+          201,
+        )
+      }
       if (url.includes('/teams') && method === 'POST') {
         const body = JSON.parse(String(init?.body ?? '{}')) as {
           name: string
@@ -153,6 +161,51 @@ describe('DashboardPage', () => {
     // The form collapses and the refetched list shows the new team owned by the creator.
     expect(await screen.findByText('Launch team')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'New team' })).toBeInTheDocument()
+  })
+
+  test('the Invite control shows only on rows the user can administer', async () => {
+    stubApi({
+      list: [],
+      teams: [team('t-a', 'Design crew', 'owner'), team('t-b', 'Ops', 'member')],
+    })
+    renderDashboard()
+    await screen.findByText('Design crew')
+    // One owner row, one member row — exactly one Invite button (member rows hide the control).
+    expect(screen.getAllByRole('button', { name: 'Invite' })).toHaveLength(1)
+  })
+
+  test('sending an invite confirms the recipient and collapses the form', async () => {
+    stubApi({ list: [], teams: [team('t-a', 'Design crew', 'owner')] })
+    renderDashboard()
+    await screen.findByText('Design crew')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Invite' }))
+    await userEvent.type(screen.getByLabelText('Email'), 'sam@example.test')
+    await userEvent.click(screen.getByRole('button', { name: 'Send invite' }))
+
+    expect(await screen.findByText(/Invite sent to sam@example.test/)).toBeInTheDocument()
+    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
+  })
+
+  test('only an owner is offered the Admin role', async () => {
+    stubApi({ list: [], teams: [team('t-a', 'Design crew', 'admin')] })
+    renderDashboard()
+    await screen.findByText('Design crew')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Invite' }))
+    // An admin caller can only confer member — the option that would 403 is never offered.
+    expect(screen.getByRole('option', { name: /Member/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /Admin/ })).not.toBeInTheDocument()
+  })
+
+  test('an owner can choose between Member and Admin', async () => {
+    stubApi({ list: [], teams: [team('t-a', 'Design crew', 'owner')] })
+    renderDashboard()
+    await screen.findByText('Design crew')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Invite' }))
+    expect(screen.getByRole('option', { name: /Member/ })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /Admin/ })).toBeInTheDocument()
   })
 
   test('the New team button is disabled until a name is typed', async () => {

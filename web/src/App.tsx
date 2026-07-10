@@ -4,6 +4,7 @@ import { RequireAuth } from './auth/RequireAuth'
 import { DashboardPage } from './pages/DashboardPage'
 import { DocumentEditorPage } from './pages/DocumentEditorPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
+import { InviteAcceptPage } from './pages/InviteAcceptPage'
 import { LoginPage } from './pages/LoginPage'
 import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { SecurityPage } from './pages/SecurityPage'
@@ -20,6 +21,9 @@ export const App = () => (
         <Route path="/signup" element={<SignupPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        {/* Public: the emailed invite link lands here. Previewing an invite must work logged-out (the
+            token in the URL is the capability), so this is NOT wrapped in RequireAuth. */}
+        <Route path="/invite" element={<InviteAcceptPage />} />
         <Route
           path="/"
           element={

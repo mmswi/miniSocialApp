@@ -1,11 +1,16 @@
 import { type SyntheticEvent, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { AuthCard } from '../components/AuthCard'
 import { Button } from '../components/Button'
 import { TextField } from '../components/TextField'
 import { API_signup, ApiError } from '../lib/api'
+import { INVITE_TOKEN_PARAM, withInviteToken } from '../lib/invite-link'
 
 export const SignupPage = () => {
+  const [searchParams] = useSearchParams()
+  // Signup opens no session, so the invitee's next step is to log in — carry the invite token onto the
+  // login link so the accept flow survives the signup → login → /invite hop.
+  const inviteToken = searchParams.get(INVITE_TOKEN_PARAM)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
@@ -45,7 +50,10 @@ export const SignupPage = () => {
           .
         </p>
         <p className="mt-4 text-center text-sm text-slate-600">
-          <Link to="/login" className="font-medium text-slate-900 underline">
+          <Link
+            to={withInviteToken('/login', inviteToken)}
+            className="font-medium text-slate-900 underline"
+          >
             Back to log in
           </Link>
         </p>
@@ -86,7 +94,10 @@ export const SignupPage = () => {
       </form>
       <p className="mt-4 text-center text-sm text-slate-600">
         Already have an account?{' '}
-        <Link to="/login" className="font-medium text-slate-900 underline">
+        <Link
+          to={withInviteToken('/login', inviteToken)}
+          className="font-medium text-slate-900 underline"
+        >
           Log in
         </Link>
       </p>

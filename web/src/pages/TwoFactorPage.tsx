@@ -1,6 +1,6 @@
 import { WebAuthnError, startAuthentication } from '@simplewebauthn/browser'
 import { type SyntheticEvent, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
 import { AuthCard } from '../components/AuthCard'
 import { Button } from '../components/Button'
@@ -11,6 +11,7 @@ import {
   API_2faRecoveryVerify,
   ApiError,
 } from '../lib/api'
+import { INVITE_TOKEN_PARAM, withInviteToken } from '../lib/invite-link'
 
 // Reached after a 2FA user's password passes (LoginPage routes here on { mfaRequired: true }). The
 // pending-MFA cookie is already set, so this page only has to prove the second factor — a passkey, or
@@ -18,15 +19,20 @@ import {
 export const TwoFactorPage = () => {
   const navigate = useNavigate()
   const { refresh } = useAuth()
+  const [searchParams] = useSearchParams()
+  // Carried here from /login when the user came mid-invite; on success we return to /invite rather than
+  // the dashboard, so the accept screen picks back up.
+  const inviteToken = searchParams.get(INVITE_TOKEN_PARAM)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [useRecovery, setUseRecovery] = useState(false)
   const [recoveryCode, setRecoveryCode] = useState('')
 
-  // Either factor sets the session cookie on success — re-pull /auth/me, then go to the dashboard.
+  // Either factor sets the session cookie on success — re-pull /auth/me, then go back to the invite if we
+  // came from one, otherwise to the dashboard.
   const finishLogin = async () => {
     await refresh()
-    navigate('/')
+    navigate(inviteToken !== null ? withInviteToken('/invite', inviteToken) : '/')
   }
 
   // One human message from two failure families: the API's own message for a server-side reason
@@ -124,7 +130,10 @@ export const TwoFactorPage = () => {
         </>
       )}
       <p className="mt-4 text-center text-sm text-slate-600">
-        <Link to="/login" className="font-medium text-slate-900 underline">
+        <Link
+          to={withInviteToken('/login', inviteToken)}
+          className="font-medium text-slate-900 underline"
+        >
           Back to log in
         </Link>
       </p>

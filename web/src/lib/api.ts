@@ -236,3 +236,49 @@ export const API_createTeam = (input: {
   accessLevel?: ClientTeamAccessLevel
 }): Promise<{ team: TeamMeta }> =>
   request('/teams', { method: 'POST', body: JSON.stringify(input) })
+
+// --- team invites ---
+
+// Only member and admin can arrive by invite — never owner, a team gains an owner by promotion (mirror
+// of the server's createInviteBody enum).
+export type ClientInvitableRole = typeof CLIENT_TEAM_ROLES.admin | typeof CLIENT_TEAM_ROLES.member
+
+// What the server returns for a freshly issued invite. The raw token is never in it — it lives only in
+// the recipient's email — so the UI can confirm "sent to X" but can never leak a joinable link.
+export type CreatedInvite = {
+  email: string
+  role: ClientInvitableRole
+  expiresAt: string
+}
+
+// Issue an invite: the server emails the recipient a single-use link. Admin+ on the team; conferring
+// admin additionally needs owner — both enforced server-side, surfacing as an ApiError 403 whose message
+// the form shows verbatim. The echoed email is the normalized (lowercased) address the server stored.
+export const API_createInvite = (
+  teamId: string,
+  input: { email: string; role: ClientInvitableRole },
+): Promise<{ invite: CreatedInvite }> =>
+  request(`/teams/${teamId}/invites`, { method: 'POST', body: JSON.stringify(input) })
+
+// The public preview of an invite (no session needed) — what the /invite page shows a visitor before
+// sign-in. Mirrors the server's TeamInvitePreview wire shape. An invalid or expired token surfaces as an
+// ApiError (code 'invalid_invite' / 'invite_expired'), which the page renders as a dead-link state.
+export type InvitePreview = {
+  teamId: string
+  teamName: string
+  email: string
+  role: ClientTeamRole
+}
+
+// Public: the token in the query string is the capability, so this rides no session. URL-encoded because
+// the raw token is a base64url string going into a query param.
+export const API_previewInvite = (token: string): Promise<{ invite: InvitePreview }> =>
+  request(`/teams/invites/preview?token=${encodeURIComponent(token)}`)
+
+// Accept an invite as the signed-in user. Rides the httpOnly session cookie; the server matches the
+// caller's email to the invite (a mismatch is an ApiError 403; a used/expired token a 400). Returns the
+// team just joined, so the caller can route onward.
+export const API_acceptInvite = (
+  token: string,
+): Promise<{ team: { teamId: string; teamName: string } }> =>
+  request('/teams/invites/accept', { method: 'POST', body: JSON.stringify({ token }) })
