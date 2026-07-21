@@ -25,10 +25,25 @@ const doc = (id: string, title: string): Record<string, string> => ({
 const jsonResponse = (body: unknown, status = 200) =>
   Promise.resolve({ ok: status < 400, status, json: async () => body })
 
-// One stub serves AuthProvider's /auth/me, the documents endpoints, and the sidebar's /teams list (the
-// AppShell the dashboard now renders inside fetches teams). Teams default to empty here — the team list +
-// creation are the sidebar's concern, covered in AppShell.test.tsx.
-const stubApi = (input: { list: unknown[]; created?: Record<string, string> }) =>
+const team = (id: string, name: string, accessLevel = 'write'): Record<string, string> => ({
+  id,
+  name,
+  role: 'owner',
+  accessLevel,
+  createdAt: '2026-06-01T00:00:00.000Z',
+  updatedAt: '2026-06-20T00:00:00.000Z',
+})
+
+// One stub serves AuthProvider's /auth/me, the documents endpoints, the sidebar's /teams list, and the
+// Share panel's reads/writes (a document's current shares + assign/unassign). `teams` is the caller's teams
+// (checkbox rows); `shares` is which of them a document is already shared into. The more specific
+// /teams/:id/documents and /documents/:id/teams paths are matched before the bare lists.
+const stubApi = (input: {
+  list: unknown[]
+  created?: Record<string, string>
+  teams?: Record<string, string>[]
+  shares?: Record<string, string>[]
+}) =>
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string, init?: RequestInit) => {
@@ -36,8 +51,17 @@ const stubApi = (input: { list: unknown[]; created?: Record<string, string> }) =
       if (url.includes('/auth/me')) {
         return jsonResponse(me)
       }
+      if (/\/teams\/[^/]+\/documents\/[^/]+/.test(url) && method === 'DELETE') {
+        return jsonResponse(null, 204)
+      }
+      if (/\/teams\/[^/]+\/documents/.test(url) && method === 'POST') {
+        return jsonResponse({ document: input.created ?? {} }, 201)
+      }
+      if (/\/documents\/[^/]+\/teams/.test(url)) {
+        return jsonResponse({ teams: input.shares ?? [] })
+      }
       if (url.includes('/teams')) {
-        return jsonResponse({ teams: [] })
+        return jsonResponse({ teams: input.teams ?? [] })
       }
       if (url.includes('/documents') && method === 'POST') {
         return jsonResponse({ document: input.created }, 201)
@@ -92,5 +116,53 @@ describe('DashboardPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'New document' }))
     // The new (empty) doc opens straight in the editor — navigation to /editor/doc-new.
     expect(await screen.findByText('Editor open')).toBeInTheDocument()
+  })
+
+  test('the Share panel lists your teams, pre-checking the ones the document is already in', async () => {
+    stubApi({
+      list: [doc('doc-a', 'Roadmap')],
+      teams: [team('t-a', 'Design crew'), team('t-b', 'Ops')],
+      shares: [team('t-a', 'Design crew')], // already shared into Design
+    })
+    renderDashboard()
+    await screen.findByText('Roadmap')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Share' }))
+    // A checkbox per team, the shared one checked, the other not.
+    const design = await screen.findByRole('checkbox', { name: /Design crew/ })
+    const ops = screen.getByRole('checkbox', { name: /Ops/ })
+    expect(design).toBeChecked()
+    expect(ops).not.toBeChecked()
+  })
+
+  test('checking a team shares the document; unchecking unshares it', async () => {
+    stubApi({
+      list: [doc('doc-a', 'Roadmap')],
+      teams: [team('t-a', 'Design crew')],
+      shares: [], // not shared with anyone yet
+    })
+    renderDashboard()
+    await screen.findByText('Roadmap')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Share' }))
+    const design = await screen.findByRole('checkbox', { name: /Design crew/ })
+    expect(design).not.toBeChecked()
+
+    // Check → assign → the box reflects it.
+    await userEvent.click(design)
+    expect(await screen.findByRole('checkbox', { name: /Design crew/ })).toBeChecked()
+
+    // Uncheck → unassign → back to unchecked.
+    await userEvent.click(screen.getByRole('checkbox', { name: /Design crew/ }))
+    expect(await screen.findByRole('checkbox', { name: /Design crew/ })).not.toBeChecked()
+  })
+
+  test('the Share panel offers an empty state when you have no teams', async () => {
+    stubApi({ list: [doc('doc-a', 'Roadmap')], teams: [] })
+    renderDashboard()
+    await screen.findByText('Roadmap')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Share' }))
+    expect(await screen.findByText(/not in any teams yet/)).toBeInTheDocument()
   })
 })

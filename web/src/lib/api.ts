@@ -199,6 +199,31 @@ export const API_renameDocument = (
 export const API_deleteDocument = (id: string): Promise<null> =>
   request(`/documents/${id}`, { method: 'DELETE' })
 
+// A team a document is shared into, as the Share panel's checkbox rows read it — the team plus its access
+// level ("Design · write access"). Mirrors the server's DocumentTeamListItem.
+export type DocumentTeamShare = {
+  id: string
+  name: string
+  accessLevel: ClientTeamAccessLevel
+}
+
+// The teams a document is shared into. Owner-only (a non-owner gets 403 → ApiError); the dashboard lists
+// only owned documents, so the Share control is only ever reached for a document the caller owns.
+export const API_getDocumentTeams = (id: string): Promise<{ teams: DocumentTeamShare[] }> =>
+  request(`/documents/${id}/teams`)
+
+// Share a document into a team. Member+ on the team AND you own the document; a re-share is a 409 (already
+// shared) → ApiError. Returns the shared document's metadata.
+export const API_assignDocumentToTeam = (
+  teamId: string,
+  documentId: string,
+): Promise<{ document: DocumentMeta }> =>
+  request(`/teams/${teamId}/documents`, { method: 'POST', body: JSON.stringify({ documentId }) })
+
+// Unshare a document from a team. Allowed for the document owner (always the case from the dashboard).
+export const API_unassignDocumentFromTeam = (teamId: string, documentId: string): Promise<null> =>
+  request(`/teams/${teamId}/documents/${documentId}`, { method: 'DELETE' })
+
 // --- teams ---
 
 // The team's access level (its ceiling over shared documents) and a member's role. The frontend's OWN
