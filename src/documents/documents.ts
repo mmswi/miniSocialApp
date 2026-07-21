@@ -60,19 +60,19 @@ export const getDocumentForOwner = async (input: {
   return row === undefined ? null : toSummary(row)
 }
 
-// Rename the owner's document. The WHERE is the authorization (same shape as get/delete): a bad id or
-// another user's document matches no row, so `returning()` is empty and we hand back null for the route
-// to answer 404 — never a hint that the document exists. `updatedAt` is bumped because a rename is a
-// modification (it also floats the doc to the top of the dashboard's most-recently-touched list).
-export const renameDocumentForOwner = async (input: {
+// Rename a document by id. Unlike get/delete, the WHERE is NOT the authorization: with M5, renaming is
+// allowed for write+ team members too, not just the owner, so the route resolves effective access
+// (getDocumentAccessForUser + canWriteDocument) BEFORE calling this. A null return means only a race — the
+// document was deleted between that check and this update — which the route answers as 404. `updatedAt` is
+// bumped because a rename is a modification (it also floats the doc to the top of the dashboard's list).
+export const renameDocument = async (input: {
   documentId: string
-  ownerId: string
   title: string
 }): Promise<DocumentSummary | null> => {
   const [row] = await db
     .update(documentsTable)
     .set({ title: input.title, updatedAt: new Date() })
-    .where(and(eq(documentsTable.id, input.documentId), eq(documentsTable.ownerId, input.ownerId)))
+    .where(eq(documentsTable.id, input.documentId))
     .returning()
   return row === undefined ? null : toSummary(row)
 }

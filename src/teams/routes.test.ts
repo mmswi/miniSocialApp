@@ -405,3 +405,108 @@ describe('/teams/:teamId/documents — sharing', () => {
     expect(response.statusCode).toBe(404)
   })
 })
+
+// The /documents routes now resolve access through team membership (M5-3). These live here because the setup
+// is team-heavy — a doc shared into a team the member belongs to — and this file already has the harness.
+describe('/documents/:id — access through team membership', () => {
+  // Owner shares a fresh document into a fresh team at `level`, then seats a fresh plain member in that team.
+  const shareDocWithMember = async (
+    level: 'read' | 'write' | 'delete',
+  ): Promise<{
+    ownerToken: string
+    memberToken: string
+    documentId: string
+    teamId: string
+  }> => {
+    const ownerToken = await signInNewUser(`docacc-owner-${level}`)
+    const team = await createTeamAs(ownerToken, { name: `Team ${level}`, accessLevel: level })
+    const document = await createDocumentAs(ownerToken, 'Shared doc')
+    expect((await assignDocument(ownerToken, team.id, document.id)).statusCode).toBe(201)
+    const member = await signInNewUserWithId(`docacc-member-${level}`)
+    await addTeamMember(team.id, member.userId, 'member')
+    return { ownerToken, memberToken: member.token, documentId: document.id, teamId: team.id }
+  }
+
+  test('a team member can read a shared document and sees their access level', async () => {
+    const { memberToken, documentId } = await shareDocWithMember('write')
+    const response = await app.inject({
+      method: 'GET',
+      url: `/documents/${documentId}`,
+      headers: authCookie(memberToken),
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json<{ access: string }>().access).toBe('write')
+  })
+
+  test('the owner’s own access reads as "owner"', async () => {
+    const { ownerToken, documentId } = await shareDocWithMember('write')
+    const response = await app.inject({
+      method: 'GET',
+      url: `/documents/${documentId}`,
+      headers: authCookie(ownerToken),
+    })
+    expect(response.json<{ access: string }>().access).toBe('owner')
+  })
+
+  test('a write-level member can rename the document', async () => {
+    const { memberToken, documentId } = await shareDocWithMember('write')
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/documents/${documentId}`,
+      headers: authCookie(memberToken),
+      payload: { title: 'Renamed by member' },
+    })
+    expect(response.statusCode).toBe(200)
+    expect(response.json<{ document: { title: string } }>().document.title).toBe(
+      'Renamed by member',
+    )
+  })
+
+  test('a read-level member cannot rename — 403, not 404 (they can see the doc)', async () => {
+    const { memberToken, documentId } = await shareDocWithMember('read')
+    const response = await app.inject({
+      method: 'PATCH',
+      url: `/documents/${documentId}`,
+      headers: authCookie(memberToken),
+      payload: { title: 'nope' },
+    })
+    expect(response.statusCode).toBe(403)
+  })
+
+  test('even a delete-level member cannot delete the document — hard delete stays owner-only (403)', async () => {
+    const { memberToken, documentId } = await shareDocWithMember('delete')
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/documents/${documentId}`,
+      headers: authCookie(memberToken),
+    })
+    expect(response.statusCode).toBe(403)
+  })
+
+  test('GET /documents/:id/teams — owner sees the share, member 403, stranger 404', async () => {
+    const { ownerToken, memberToken, documentId, teamId } = await shareDocWithMember('write')
+
+    const ownerView = await app.inject({
+      method: 'GET',
+      url: `/documents/${documentId}/teams`,
+      headers: authCookie(ownerToken),
+    })
+    expect(ownerView.statusCode).toBe(200)
+    expect(ownerView.json<{ teams: { id: string }[] }>().teams.map((t) => t.id)).toContain(teamId)
+
+    const memberView = await app.inject({
+      method: 'GET',
+      url: `/documents/${documentId}/teams`,
+      headers: authCookie(memberToken),
+    })
+    expect(memberView.statusCode).toBe(403)
+
+    const strangerToken = await signInNewUser('docacc-stranger')
+    const strangerView = await app.inject({
+      method: 'GET',
+      url: `/documents/${documentId}/teams`,
+      headers: authCookie(strangerToken),
+    })
+    expect(strangerView.statusCode).toBe(404)
+  })
+})

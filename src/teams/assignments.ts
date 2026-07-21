@@ -1,7 +1,13 @@
-import { and, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { isUniqueViolation } from '../db/errors.ts'
-import { documentTeamsTable, documentsTable, usersTable } from '../db/schema.ts'
+import {
+  type TeamAccessLevel,
+  documentTeamsTable,
+  documentsTable,
+  teamsTable,
+  usersTable,
+} from '../db/schema.ts'
 import type { DocumentSummary } from '../documents/documents.ts'
 
 // A document shared into a team, as the team page lists it: the same summary the owner sees, plus WHO owns
@@ -79,4 +85,27 @@ export const listTeamDocuments = async (teamId: string): Promise<TeamDocumentSum
     .innerJoin(usersTable, eq(usersTable.id, documentsTable.ownerId))
     .where(eq(documentTeamsTable.teamId, teamId))
     .orderBy(desc(documentsTable.updatedAt))
+}
+
+// One team a document is shared into, as the owner's share panel lists it: the team plus its access level,
+// so the panel can show "Design — can edit". The other direction of listTeamDocuments.
+export type DocumentTeamListItem = {
+  id: string
+  name: string
+  accessLevel: TeamAccessLevel
+}
+
+// The teams a document is shared into, by name — feeds the owner-only GET /documents/:id/teams share panel.
+// Owner-only scoping is the route's job; this just reads the shares for one document.
+export const listTeamsForDocument = async (documentId: string): Promise<DocumentTeamListItem[]> => {
+  return db
+    .select({
+      id: teamsTable.id,
+      name: teamsTable.name,
+      accessLevel: teamsTable.accessLevel,
+    })
+    .from(documentTeamsTable)
+    .innerJoin(teamsTable, eq(teamsTable.id, documentTeamsTable.teamId))
+    .where(eq(documentTeamsTable.documentId, documentId))
+    .orderBy(asc(teamsTable.name))
 }
