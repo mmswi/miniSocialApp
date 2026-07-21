@@ -356,6 +356,44 @@ export const teamInvitesTable = pgTable(
   ],
 )
 
+/*
+ * Document ↔ team sharing (step 4 — M5) — the many-to-many join between documents and teams
+ *
+ *   documents ──1──<── document_teams >──many──1── teams   (a doc shared into many teams; a team holds many docs)
+ *
+ * A document always lives in its OWNER's private space; being shared into a team is ADDITIVE — a row here
+ * grants the team's members the team's access level over the doc, and removing the row revokes exactly that,
+ * never touching the owner's own access. Effective access for a user on a doc is resolved from these rows:
+ * owner → full; else the MAX access level over the teams that contain both the user and the doc (see
+ * documents/access.ts). A join table (not a team_id column on documents) is what lets one doc reach several
+ * teams at once — the whole point of "share with the design team AND the reviewers".
+ */
+export const documentTeamsTable = pgTable(
+  'document_teams',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documentsTable.id, { onDelete: 'cascade' }),
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teamsTable.id, { onDelete: 'cascade' }),
+    // Who shared it — a footnote, NOT the authorization to unshare (that's computed from doc ownership +
+    // team role in access.ts). set null like teams.created_by_id: deleting the sharer must not silently
+    // unshare the doc, so the assignment survives with added_by_id nulled.
+    addedById: uuid('added_by_id').references(() => usersTable.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // A doc is shared into a team at most once: re-assigning the same pair is not a second share. The DB is
+    // the race-safe arbiter — a duplicate insert is a 23505 the data layer turns into a 409, not a
+    // check-then-insert two requests race.
+    uniqueIndex('document_teams_document_team_unique').on(t.documentId, t.teamId),
+    // "Which documents does this team hold?" — the team page's document list — scans by team.
+    index('document_teams_team_idx').on(t.teamId),
+  ],
+)
+
 export type UserRow = typeof usersTable.$inferSelect
 export type NewUserRow = typeof usersTable.$inferInsert
 export type AccountRow = typeof accountsTable.$inferSelect
@@ -373,3 +411,5 @@ export type TeamMemberRow = typeof teamMembersTable.$inferSelect
 export type NewTeamMemberRow = typeof teamMembersTable.$inferInsert
 export type TeamInviteRow = typeof teamInvitesTable.$inferSelect
 export type NewTeamInviteRow = typeof teamInvitesTable.$inferInsert
+export type DocumentTeamRow = typeof documentTeamsTable.$inferSelect
+export type NewDocumentTeamRow = typeof documentTeamsTable.$inferInsert
