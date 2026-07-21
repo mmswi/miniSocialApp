@@ -8,7 +8,16 @@ import * as Y from 'yjs'
 import { SESSION_COOKIE_NAME } from '../auth/cookies.ts'
 import { createSession } from '../auth/session.ts'
 import { db } from '../db/client.ts'
-import { documentsTable, usersTable } from '../db/schema.ts'
+import {
+  TEAM_ACCESS_LEVELS,
+  TEAM_ROLES,
+  type TeamAccessLevel,
+  documentTeamsTable,
+  documentsTable,
+  teamMembersTable,
+  teamsTable,
+  usersTable,
+} from '../db/schema.ts'
 import { buildServer } from '../server.ts'
 import { loadDoc } from './doc-store.ts'
 import { SYNC_MESSAGE } from './sync-protocol.ts'
@@ -19,6 +28,7 @@ import { SYNC_MESSAGE } from './sync-protocol.ts'
 const app = buildServer()
 let port = 0
 const createdEmails: string[] = []
+const createdTeamIds: string[] = []
 let ownerCookie = ''
 let strangerCookie = ''
 let ownerId = ''
@@ -43,6 +53,29 @@ const freshDocument = async (): Promise<string> => {
     throw new Error('failed to seed document')
   }
   return doc.id
+}
+
+// Share a document into a fresh team at `accessLevel` and seat a brand-new user in it. Returns that member's
+// session cookie — the M5 path by which someone OTHER than the owner may join the live room. Direct inserts
+// (not the REST routes) keep this focused on the ws gate; the routes are covered by teams/routes.test.ts.
+const shareDocumentWithNewMember = async (
+  documentId: string,
+  accessLevel: TeamAccessLevel,
+): Promise<string> => {
+  const [team] = await db
+    .insert(teamsTable)
+    .values({ name: `sync-team-${randomUUID()}`, accessLevel })
+    .returning()
+  if (team === undefined) {
+    throw new Error('failed to seed team')
+  }
+  createdTeamIds.push(team.id)
+  const member = await seedUser('sync-member')
+  await db
+    .insert(teamMembersTable)
+    .values({ teamId: team.id, userId: member.id, role: TEAM_ROLES.member })
+  await db.insert(documentTeamsTable).values({ documentId, teamId: team.id })
+  return member.cookie
 }
 
 const waitForOpen = (ws: WebSocket): Promise<void> =>
@@ -174,6 +207,11 @@ afterAll(async () => {
   // destroys the underlying sockets so close() resolves — the same move real graceful shutdown needs.
   app.server.closeAllConnections()
   await app.close()
+  // Teams are seeded directly (created_by_id null), so deleting users won't cascade them away — clean the
+  // teams first, which cascades their memberships + shares, then the users.
+  if (createdTeamIds.length > 0) {
+    await db.delete(teamsTable).where(inArray(teamsTable.id, createdTeamIds))
+  }
   if (createdEmails.length > 0) {
     await db.delete(usersTable).where(inArray(usersTable.email, createdEmails))
   }
@@ -294,7 +332,7 @@ describe('hand-built ws sync', () => {
     expect(await upgradeRefused(documentId)).toBe(true)
   })
 
-  test('the upgrade is refused for a non-owner (404, not a room)', async () => {
+  test('the upgrade is refused for a stranger — neither owner nor a shared-team member (404)', async () => {
     const documentId = await freshDocument()
     expect(await upgradeRefused(documentId, strangerCookie)).toBe(true)
   })
@@ -302,5 +340,35 @@ describe('hand-built ws sync', () => {
   test('the owner’s upgrade is accepted', async () => {
     const documentId = await freshDocument()
     expect(await upgradeRefused(documentId, ownerCookie)).toBe(false)
+  })
+
+  test('a member of a team the document is shared into may join the room (M5)', async () => {
+    const documentId = await freshDocument()
+    const memberCookie = await shareDocumentWithNewMember(documentId, TEAM_ACCESS_LEVELS.write)
+    expect(await upgradeRefused(documentId, memberCookie)).toBe(false)
+  })
+
+  test('a read-level member may also join — they receive content; M6 gates their writes', async () => {
+    const documentId = await freshDocument()
+    const memberCookie = await shareDocumentWithNewMember(documentId, TEAM_ACCESS_LEVELS.read)
+    expect(await upgradeRefused(documentId, memberCookie)).toBe(false)
+  })
+
+  test('the owner and a shared team member co-edit live, both directions (M5 payoff)', async () => {
+    const documentId = await freshDocument()
+    const memberCookie = await shareDocumentWithNewMember(documentId, TEAM_ACCESS_LEVELS.write)
+    const owner = await connect(documentId, ownerCookie)
+    const member = await connect(documentId, memberCookie)
+
+    owner.type('from the owner')
+    await waitFor(() => member.text() === 'from the owner')
+    expect(member.text()).toBe('from the owner')
+
+    member.type(' and the teammate')
+    await waitFor(() => owner.text() === 'from the owner and the teammate')
+    expect(owner.text()).toBe('from the owner and the teammate')
+
+    await owner.close()
+    await member.close()
   })
 })

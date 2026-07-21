@@ -2,14 +2,22 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { SESSION_COOKIE_NAME } from '../auth/cookies.ts'
 import { getSessionUser } from '../auth/session.ts'
-import { getDocumentForOwner } from '../documents/documents.ts'
+import { getDocumentAccessForUser } from '../documents/access.ts'
 import { type DocRoom, type SyncConnection, joinRoom } from './doc-room.ts'
 
 const syncParams = z.object({ id: z.string().uuid() })
 
 // The realtime sync endpoint for one document. Path mirrors the REST route (/documents/:id/sync) so a
-// single Vite proxy entry forwards both, and the authorization is the SAME owner check the REST get
-// uses — there is no live room you couldn't also read over REST.
+// single Vite proxy entry forwards both, and the join gate is the SAME effective-access resolver the REST
+// GET uses (M5): owner OR a member of a team the doc is shared into. So "can read this over REST" and "can
+// join its live room" are the same computation — parity by construction, not two checks kept in sync by
+// hand. There is no live room you couldn't also read over REST.
+//
+// M5 LIMITATION (closed by M6): the gate only decides whether you may JOIN. It does NOT yet enforce your
+// access LEVEL per message, so a read-level member who joins can currently still send edits over the ws
+// (REST PATCH correctly 403s them — only this ws write path is open). M6 adds per-message canEditDoc in
+// doc-room.ts to drop a reader's inbound updates. Deliberately not stashing access on the request here —
+// that seam is M6's first move.
 export const syncRoutes = async (app: FastifyInstance): Promise<void> => {
   app.get(
     '/documents/:id/sync',
@@ -17,7 +25,7 @@ export const syncRoutes = async (app: FastifyInstance): Promise<void> => {
       websocket: true,
       // Auth-on-upgrade: this runs BEFORE the socket opens, so an unauthorized client never gets a live
       // connection — it gets a clean HTTP error on the upgrade instead. Same non-oracle rule as REST: a
-      // doc that isn't yours is 404, never 403.
+      // doc you can't reach is 404, never 403.
       preValidation: async (req, reply) => {
         const parsed = syncParams.safeParse(req.params)
         if (!parsed.success) {
@@ -28,11 +36,11 @@ export const syncRoutes = async (app: FastifyInstance): Promise<void> => {
         if (active === null) {
           return reply.code(401).send({ error: 'not_authenticated' })
         }
-        const document = await getDocumentForOwner({
+        const access = await getDocumentAccessForUser({
           documentId: parsed.data.id,
-          ownerId: active.userId,
+          userId: active.userId,
         })
-        if (document === null) {
+        if (access === null) {
           return reply.code(404).send({ error: 'document_not_found' })
         }
       },
