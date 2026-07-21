@@ -13,14 +13,19 @@ type Props = {
   provider: SyncProvider
   userName: string
   userColor: string
+  // false → a read-only viewer: TipTap makes the surface non-editable, so keystrokes never even become Yjs
+  // updates to send. This mirrors the server's read-only enforcement (M6) in the UI so a reader isn't left
+  // typing into a void — but the server stays the real guard; `editable` is convenience, not security.
+  editable: boolean
 }
 
 // The TipTap editor, bound to Yjs. Collaboration replaces the editor's own document storage with the
 // Y.Doc (so every keystroke becomes a Yjs update the provider streams), and CollaborationCaret paints
 // the other participants' cursors and selections from awareness. The content schema comes from the
 // shared documentExtensions — the same schema the sync layer's updates describe.
-export const CollaborativeEditor = ({ doc, provider, userName, userColor }: Props) => {
+export const CollaborativeEditor = ({ doc, provider, userName, userColor, editable }: Props) => {
   const editor = useEditor({
+    editable,
     extensions: [
       ...documentExtensions,
       Collaboration.configure({ document: doc }),
@@ -29,7 +34,7 @@ export const CollaborativeEditor = ({ doc, provider, userName, userColor }: Prop
     editorProps: {
       attributes: {
         class: 'editor-surface',
-        'aria-label': 'Document editor',
+        'aria-label': editable ? 'Document editor' : 'Document, view only',
       },
     },
   })

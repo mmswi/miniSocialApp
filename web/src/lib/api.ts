@@ -176,10 +176,25 @@ export type DocumentMeta = {
 
 export const API_listDocuments = (): Promise<{ documents: DocumentMeta[] }> => request('/documents')
 
-// One document's metadata (for the editor header). A 404 (not yours / unknown) surfaces as an ApiError
-// with status 404 — the editor page shows a not-found state rather than opening a blank doc.
-export const API_getDocument = (id: string): Promise<{ document: DocumentMeta }> =>
-  request(`/documents/${id}`)
+// The caller's effective access to a document, as GET /documents/:id reports it: 'owner' (full), or the
+// team access level they reach it through. Mirrors the server's DocumentAccess. 'owner' isn't a team level,
+// so it gets its own named constant rather than folding into the team-level mirror.
+export const CLIENT_DOCUMENT_ACCESS_OWNER = 'owner'
+export type ClientDocumentAccess = typeof CLIENT_DOCUMENT_ACCESS_OWNER | ClientTeamAccessLevel
+
+// Whether an access permits editing — owner or write/delete; read is view-only. Mirrors the server's
+// canWriteDocument, so the editor goes read-only in exactly the cases the server would drop the write.
+export const canEditWithAccess = (access: ClientDocumentAccess): boolean =>
+  access === CLIENT_DOCUMENT_ACCESS_OWNER ||
+  access === CLIENT_TEAM_ACCESS_LEVELS.write ||
+  access === CLIENT_TEAM_ACCESS_LEVELS.delete
+
+// One document's metadata plus the caller's own access to it (for the editor header + read-only gating). A
+// 404 (unreachable / unknown) surfaces as an ApiError with status 404 — the editor page shows a not-found
+// state rather than opening a blank doc.
+export const API_getDocument = (
+  id: string,
+): Promise<{ document: DocumentMeta; access: ClientDocumentAccess }> => request(`/documents/${id}`)
 
 // No title sends `{}`, so the server applies its default ('Untitled document').
 export const API_createDocument = (
