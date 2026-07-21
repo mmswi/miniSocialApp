@@ -371,4 +371,37 @@ describe('hand-built ws sync', () => {
     await owner.close()
     await member.close()
   })
+
+  test('a read-level member cannot write over the ws — edits dropped, not broadcast or persisted (M6)', async () => {
+    const documentId = await freshDocument()
+    const readerCookie = await shareDocumentWithNewMember(documentId, TEAM_ACCESS_LEVELS.read)
+    const owner = await connect(documentId, ownerCookie)
+    const reader = await connect(documentId, readerCookie)
+
+    // A reader RECEIVES: the owner writes, and the read-level member sees it (SyncStep1 is allowed, so the
+    // reader gets content — only its own writes are blocked).
+    owner.type('owner content')
+    await waitFor(() => reader.text() === 'owner content')
+    expect(reader.text()).toBe('owner content')
+    // Confirm the owner's edit is durably persisted BEFORE we test the reader's write is not, so the final
+    // assertion can't pass just because nothing has flushed yet.
+    await waitFor(
+      async () => (await loadDoc(documentId)).getText(SHARED_TEXT).toString() === 'owner content',
+    )
+
+    // The reader tries to write. Its client applies the edit locally and sends it up; the server drops it.
+    reader.type(' reader edit')
+    await waitFor(() => reader.text() === 'owner content reader edit') // local-only + sent to the server
+
+    // Broadcast window: had the server (wrongly) accepted the reader's update, the owner would see it here.
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(owner.text()).toBe('owner content') // the owner never received the reader's edit
+
+    // And it was never persisted — a fresh reload from Postgres holds only the owner's content.
+    const persisted = await loadDoc(documentId)
+    expect(persisted.getText(SHARED_TEXT).toString()).toBe('owner content')
+
+    await owner.close()
+    await reader.close()
+  })
 })
