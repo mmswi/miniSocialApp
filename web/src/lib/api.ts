@@ -237,6 +237,34 @@ export const API_createTeam = (input: {
 }): Promise<{ team: TeamMeta }> =>
   request('/teams', { method: 'POST', body: JSON.stringify(input) })
 
+// One team the caller is a member of, plus their own role in it — what the team page's header shows. A
+// non-member (or unknown id) is a 404 → ApiError, which the page renders as a not-found state.
+export const API_getTeam = (teamId: string): Promise<{ team: TeamMeta; role: ClientTeamRole }> =>
+  request(`/teams/${teamId}`)
+
+// A document shared into a team, as the team page lists it: the metadata plus who owns it (a team holds
+// documents from several members, so "shared by Ana" needs a name). ownerName is nullable — the client
+// falls back to a placeholder in that case.
+export type TeamDocumentListItem = DocumentMeta & { ownerName: string | null }
+
+// The documents shared into a team — member+ only (a non-member gets a 404 → ApiError).
+export const API_listTeamDocuments = (
+  teamId: string,
+): Promise<{ documents: TeamDocumentListItem[] }> => request(`/teams/${teamId}/documents`)
+
+// A team member as the team page's roster shows them. name is nullable (falls back to email); email is
+// shown because team members collaborate. Mirrors the server's TeamMemberSummary.
+export type TeamMemberListItem = {
+  userId: string
+  name: string | null
+  email: string
+  role: ClientTeamRole
+}
+
+// The team's members — member+ only (a non-member gets a 404 → ApiError).
+export const API_listTeamMembers = (teamId: string): Promise<{ members: TeamMemberListItem[] }> =>
+  request(`/teams/${teamId}/members`)
+
 // --- team invites ---
 
 // Only member and admin can arrive by invite — never owner, a team gains an owner by promotion (mirror

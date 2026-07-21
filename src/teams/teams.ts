@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import {
   TEAM_ROLES,
@@ -7,6 +7,7 @@ import {
   type TeamRow,
   teamMembersTable,
   teamsTable,
+  usersTable,
 } from '../db/schema.ts'
 
 // What a client needs to render a team — never the created_by_id footnote. Dates leave here as Date
@@ -99,6 +100,32 @@ export const getTeamForMember = async (input: {
     .where(eq(teamsTable.id, input.teamId))
     .limit(1)
   return row === undefined ? null : row
+}
+
+// A member of a team, as the team page's member list shows them: who they are + their role in the team.
+// name is nullable (a user who never set one); the client falls back to the email. email is shown because
+// team members collaborate — the same address book the invite flow already works in.
+export type TeamMemberSummary = {
+  userId: string
+  name: string | null
+  email: string
+  role: TeamRole
+}
+
+// The members of a team, oldest-membership first (owners created the team, so they naturally lead). Scoping
+// is the route's job (member+): this trusts it's being called for a team the caller may see.
+export const listTeamMembers = async (teamId: string): Promise<TeamMemberSummary[]> => {
+  return db
+    .select({
+      userId: usersTable.id,
+      name: usersTable.name,
+      email: usersTable.email,
+      role: teamMembersTable.role,
+    })
+    .from(teamMembersTable)
+    .innerJoin(usersTable, eq(usersTable.id, teamMembersTable.userId))
+    .where(eq(teamMembersTable.teamId, teamId))
+    .orderBy(asc(teamMembersTable.createdAt))
 }
 
 // Just a team's name, by id — no membership scoping. The invite route calls this AFTER requireTeamRole has

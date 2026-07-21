@@ -226,6 +226,31 @@ describe('/teams', () => {
     })
     expect(response.statusCode).toBe(400)
   })
+
+  test('members list: a member sees the roster; a non-member gets 404', async () => {
+    const ownerToken = await signInNewUser('members-owner')
+    const team = await createTeamAs(ownerToken, { name: 'Roster' })
+    const member = await signInNewUserWithId('members-member')
+    await addTeamMember(team.id, member.userId, 'member')
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/teams/${team.id}/members`,
+      headers: authCookie(ownerToken),
+    })
+    expect(listed.statusCode).toBe(200)
+    const { members } = listed.json<{ members: { userId: string; role: string }[] }>()
+    expect(members.map((m) => m.role).sort()).toEqual(['member', 'owner'])
+    expect(members.some((m) => m.userId === member.userId)).toBe(true)
+
+    const strangerToken = await signInNewUser('members-stranger')
+    const asStranger = await app.inject({
+      method: 'GET',
+      url: `/teams/${team.id}/members`,
+      headers: authCookie(strangerToken),
+    })
+    expect(asStranger.statusCode).toBe(404)
+  })
 })
 
 describe('/teams/:teamId/documents — sharing', () => {

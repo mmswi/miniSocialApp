@@ -9,6 +9,7 @@ import { LoginPage } from './pages/LoginPage'
 import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { SecurityPage } from './pages/SecurityPage'
 import { SignupPage } from './pages/SignupPage'
+import { TeamPage } from './pages/TeamPage'
 import { TwoFactorPage } from './pages/TwoFactorPage'
 
 export const App = () => (
@@ -37,6 +38,16 @@ export const App = () => (
           element={
             <RequireAuth>
               <SecurityPage />
+            </RequireAuth>
+          }
+        />
+        {/* Singular /team/:teamId — deliberately NOT a prefix of the API-proxied /teams, so a full page
+            load here isn't forwarded to the API. The app owns /team/:teamId; the API owns /teams/:teamId. */}
+        <Route
+          path="/team/:teamId"
+          element={
+            <RequireAuth>
+              <TeamPage />
             </RequireAuth>
           }
         />

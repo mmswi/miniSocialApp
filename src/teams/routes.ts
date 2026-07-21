@@ -24,7 +24,13 @@ import {
   revokeTeamInvite,
   sendTeamInviteEmail,
 } from './invites.ts'
-import { createTeam, getTeamForMember, getTeamNameById, listTeamsForUser } from './teams.ts'
+import {
+  createTeam,
+  getTeamForMember,
+  getTeamNameById,
+  listTeamMembers,
+  listTeamsForUser,
+} from './teams.ts'
 
 const createTeamBody = z.object({
   name: z.string().trim().min(1).max(100),
@@ -182,6 +188,15 @@ export const teamRoutes = async (app: FastifyInstance): Promise<void> => {
       sessionEmail: user.email,
     })
     return { team }
+  })
+
+  // The team's members — the team page's member list. Member+ to see it (a non-member gets 404, no oracle).
+  app.get('/:teamId/members', async (req) => {
+    const { userId } = getAuthUser(req)
+    const { teamId } = parseOrThrow(teamIdParams, req.params)
+    await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.member })
+    const members = await listTeamMembers(teamId)
+    return { members }
   })
 
   // The documents shared into this team — the team page's document list. Member+ to see it (a non-member
