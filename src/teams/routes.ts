@@ -8,8 +8,15 @@ import {
   requireAuthHook,
 } from '../auth/route-helpers.ts'
 import { TEAM_ACCESS_LEVELS, TEAM_ROLES } from '../db/schema.ts'
-import { forbidden, notFound } from '../lib/errors.ts'
-import { requireTeamRole } from './authz.ts'
+import { getDocumentForOwner } from '../documents/documents.ts'
+import { conflict, forbidden, notFound } from '../lib/errors.ts'
+import {
+  DOCUMENT_ASSIGN_RESULTS,
+  assignDocumentToTeam,
+  listTeamDocuments,
+  unassignDocumentFromTeam,
+} from './assignments.ts'
+import { TEAM_ROLE_RANK, requireTeamRole } from './authz.ts'
 import {
   acceptTeamInvite,
   createTeamInvite,
@@ -51,6 +58,17 @@ const acceptInviteBody = z.object({
 const inviteIdParams = z.object({
   teamId: z.string().uuid(),
   inviteId: z.string().min(1),
+})
+
+// Sharing a document into a team: the body names the document, the URL names the team.
+const assignDocumentBody = z.object({
+  documentId: z.string().uuid(),
+})
+
+// Both ids are in the path for unshare — DELETE /teams/:teamId/documents/:documentId.
+const teamDocumentParams = z.object({
+  teamId: z.string().uuid(),
+  documentId: z.string().uuid(),
 })
 
 // Registered under /teams. Same shape as documentRoutes: authentication is one onRequest hook for the
@@ -164,5 +182,66 @@ export const teamRoutes = async (app: FastifyInstance): Promise<void> => {
       sessionEmail: user.email,
     })
     return { team }
+  })
+
+  // The documents shared into this team — the team page's document list. Member+ to see it (a non-member
+  // gets 404, never a 403, so the endpoint isn't an existence oracle). Each item carries its owner's name.
+  app.get('/:teamId/documents', async (req) => {
+    const { userId } = getAuthUser(req)
+    const { teamId } = parseOrThrow(teamIdParams, req.params)
+    await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.member })
+    const documents = await listTeamDocuments(teamId)
+    return { documents }
+  })
+
+  // Share one of YOUR documents into the team. Two gates: member+ to reach the team (non-member → 404), and
+  // the document must be one you OWN — a doc you don't own, or that doesn't exist, is 404, never a hint that
+  // it exists. Sharing the same doc twice is a 409, and the unique(document, team) index is what decides it
+  // (assignDocumentToTeam turns the 23505 into alreadyShared) — not a check-then-insert that could race.
+  app.post('/:teamId/documents', async (req, reply) => {
+    const { userId } = getAuthUser(req)
+    const { teamId } = parseOrThrow(teamIdParams, req.params)
+    const input = parseOrThrow(assignDocumentBody, req.body)
+    await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.member })
+    const document = await getDocumentForOwner({ documentId: input.documentId, ownerId: userId })
+    if (document === null) {
+      throw notFound('document_not_found', 'Document not found.')
+    }
+    const result = await assignDocumentToTeam({
+      documentId: input.documentId,
+      teamId,
+      addedById: userId,
+    })
+    if (result === DOCUMENT_ASSIGN_RESULTS.alreadyShared) {
+      throw conflict('document_already_shared', 'That document is already shared with this team.')
+    }
+    return reply.code(201).send({ document })
+  })
+
+  // Unshare a document from the team. Three independent ways to be allowed: you own the document, OR you're
+  // an admin+ of the team, OR you're a member and the team's level is `delete` (the level that grants
+  // members the right to unassign). A caller who is neither the owner nor a member gets 404 (no oracle); a
+  // member who clears none of the bars gets 403. A pair that wasn't shared is 404 once past the guard.
+  app.delete('/:teamId/documents/:documentId', async (req, reply) => {
+    const { userId } = getAuthUser(req)
+    const { teamId, documentId } = parseOrThrow(teamDocumentParams, req.params)
+    const membership = await getTeamForMember({ teamId, userId })
+    const ownsDocument = (await getDocumentForOwner({ documentId, ownerId: userId })) !== null
+    if (membership === null && !ownsDocument) {
+      throw notFound('team_not_found', 'Team not found.')
+    }
+    const isTeamAdminPlus =
+      membership !== null && TEAM_ROLE_RANK[membership.role] >= TEAM_ROLE_RANK[TEAM_ROLES.admin]
+    const isDeleteLevelMember =
+      membership !== null && membership.accessLevel === TEAM_ACCESS_LEVELS.delete
+    const mayUnassign = ownsDocument || isTeamAdminPlus || isDeleteLevelMember
+    if (!mayUnassign) {
+      throw forbidden('insufficient_team_role', 'You do not have permission to do that.')
+    }
+    const removed = await unassignDocumentFromTeam({ documentId, teamId })
+    if (!removed) {
+      throw notFound('document_share_not_found', 'That document is not shared with this team.')
+    }
+    return reply.code(204).send()
   })
 }

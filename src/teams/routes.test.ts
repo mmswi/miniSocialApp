@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { inArray } from 'drizzle-orm'
+import { eq, inArray } from 'drizzle-orm'
 import { SESSION_COOKIE_NAME } from '../auth/cookies.ts'
 import { db } from '../db/client.ts'
-import { teamsTable, usersTable } from '../db/schema.ts'
+import { teamMembersTable, teamsTable, usersTable } from '../db/schema.ts'
 import { buildServer } from '../server.ts'
 
 // Integration tests against the real /teams routes through Fastify's in-process inject. A session is
@@ -59,6 +59,71 @@ const createTeamAs = async (
   createdTeamIds.push(team.id)
   return team
 }
+
+// Like signInNewUser, but also resolves the new user's id — needed when a test seats them in a team
+// directly (a role/level combo the assignment matrix needs but the create-team flow can't produce).
+const signInNewUserWithId = async (prefix: string): Promise<{ token: string; userId: string }> => {
+  const email = uniqueEmail(prefix)
+  await app.inject({ method: 'POST', url: '/auth/signup', payload: { email, password } })
+  const login = await app.inject({
+    method: 'POST',
+    url: '/auth/login',
+    payload: { email, password },
+  })
+  const token = sessionTokenFrom(login)
+  if (token === undefined) {
+    throw new Error('expected a session cookie after login')
+  }
+  const [user] = await db
+    .select({ id: usersTable.id })
+    .from(usersTable)
+    .where(eq(usersTable.email, email))
+    .limit(1)
+  if (user === undefined) {
+    throw new Error('expected the signed-up user to exist')
+  }
+  return { token, userId: user.id }
+}
+
+// Seat a user in a team at a given role directly — the create-team flow only ever mints owners, so the
+// member/admin cases of the unassign matrix need this. Deleting the team (cleanup) cascades the row.
+const addTeamMember = async (
+  teamId: string,
+  userId: string,
+  role: 'member' | 'admin',
+): Promise<void> => {
+  await db.insert(teamMembersTable).values({ teamId, userId, role })
+}
+
+// Create a document over HTTP; its owner is the caller. Cleaned up when the owner (a throwaway user) is
+// deleted — documents.owner_id cascades — so there's no separate document id list to track.
+const createDocumentAs = async (
+  token: string,
+  title?: string,
+): Promise<{ id: string; title: string }> => {
+  const response = await app.inject({
+    method: 'POST',
+    url: '/documents',
+    headers: authCookie(token),
+    payload: title === undefined ? {} : { title },
+  })
+  expect(response.statusCode).toBe(201)
+  return response.json<{ document: { id: string; title: string } }>().document
+}
+
+// Share a document into a team over HTTP, asserting it took. Returns the response so a caller can also
+// check the 409 path without this helper's success assertion getting in the way.
+const assignDocument = (
+  token: string,
+  teamId: string,
+  documentId: string,
+): Promise<InjectResponse> =>
+  app.inject({
+    method: 'POST',
+    url: `/teams/${teamId}/documents`,
+    headers: authCookie(token),
+    payload: { documentId },
+  })
 
 afterAll(async () => {
   if (createdTeamIds.length > 0) {
@@ -160,5 +225,183 @@ describe('/teams', () => {
       headers: authCookie(token),
     })
     expect(response.statusCode).toBe(400)
+  })
+})
+
+describe('/teams/:teamId/documents — sharing', () => {
+  test('rejects unauthenticated requests with 401', async () => {
+    const teamId = randomUUID()
+    const documentId = randomUUID()
+    expect(
+      (await app.inject({ method: 'GET', url: `/teams/${teamId}/documents` })).statusCode,
+    ).toBe(401)
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: `/teams/${teamId}/documents`,
+          payload: { documentId },
+        })
+      ).statusCode,
+    ).toBe(401)
+    expect(
+      (await app.inject({ method: 'DELETE', url: `/teams/${teamId}/documents/${documentId}` }))
+        .statusCode,
+    ).toBe(401)
+  })
+
+  test('an owner shares their document, and the team lists it', async () => {
+    const token = await signInNewUser('share-owner')
+    const team = await createTeamAs(token, { name: 'Sharers', accessLevel: 'write' })
+    const document = await createDocumentAs(token, 'Q3 Launch Plan')
+
+    const assigned = await assignDocument(token, team.id, document.id)
+    expect(assigned.statusCode).toBe(201)
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/teams/${team.id}/documents`,
+      headers: authCookie(token),
+    })
+    expect(listed.statusCode).toBe(200)
+    const { documents } = listed.json<{
+      documents: { id: string; title: string; ownerName: string | null }[]
+    }>()
+    expect(documents.map((d) => d.id)).toContain(document.id)
+    expect(documents.find((d) => d.id === document.id)?.title).toBe('Q3 Launch Plan')
+  })
+
+  test('sharing the same document twice is a 409', async () => {
+    const token = await signInNewUser('share-dup')
+    const team = await createTeamAs(token, { name: 'Dup team' })
+    const document = await createDocumentAs(token)
+
+    expect((await assignDocument(token, team.id, document.id)).statusCode).toBe(201)
+    expect((await assignDocument(token, team.id, document.id)).statusCode).toBe(409)
+  })
+
+  test("sharing a document you don't own is a 404, not a hint it exists", async () => {
+    const ownerToken = await signInNewUser('share-realowner')
+    const otherDocument = await createDocumentAs(ownerToken, 'Not yours')
+
+    const assignerToken = await signInNewUser('share-thief')
+    const assignerTeam = await createTeamAs(assignerToken, { name: 'Thief team' })
+
+    const response = await assignDocument(assignerToken, assignerTeam.id, otherDocument.id)
+    expect(response.statusCode).toBe(404)
+  })
+
+  test('a non-member can neither list nor share into the team — 404', async () => {
+    const ownerToken = await signInNewUser('share-teamowner')
+    const team = await createTeamAs(ownerToken, { name: 'Private team' })
+
+    const strangerToken = await signInNewUser('share-stranger')
+    const strangerDoc = await createDocumentAs(strangerToken)
+
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/teams/${team.id}/documents`,
+      headers: authCookie(strangerToken),
+    })
+    expect(listed.statusCode).toBe(404)
+
+    const assigned = await assignDocument(strangerToken, team.id, strangerDoc.id)
+    expect(assigned.statusCode).toBe(404)
+  })
+
+  test('the document owner can unshare, and the document itself survives', async () => {
+    const token = await signInNewUser('unshare-owner')
+    const team = await createTeamAs(token, { name: 'Owner unshares' })
+    const document = await createDocumentAs(token)
+    expect((await assignDocument(token, team.id, document.id)).statusCode).toBe(201)
+
+    const unassigned = await app.inject({
+      method: 'DELETE',
+      url: `/teams/${team.id}/documents/${document.id}`,
+      headers: authCookie(token),
+    })
+    expect(unassigned.statusCode).toBe(204)
+
+    // Unshare removes the share, never the document.
+    const doc = await app.inject({
+      method: 'GET',
+      url: `/documents/${document.id}`,
+      headers: authCookie(token),
+    })
+    expect(doc.statusCode).toBe(200)
+
+    // The team no longer lists it.
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/teams/${team.id}/documents`,
+      headers: authCookie(token),
+    })
+    const { documents } = listed.json<{ documents: { id: string }[] }>()
+    expect(documents.map((d) => d.id)).not.toContain(document.id)
+  })
+
+  test('an admin can unshare a document they do not own', async () => {
+    const ownerToken = await signInNewUser('unshare-docowner')
+    const team = await createTeamAs(ownerToken, { name: 'Admin unshares' })
+    const document = await createDocumentAs(ownerToken)
+    expect((await assignDocument(ownerToken, team.id, document.id)).statusCode).toBe(201)
+
+    const admin = await signInNewUserWithId('unshare-admin')
+    await addTeamMember(team.id, admin.userId, 'admin')
+
+    const unassigned = await app.inject({
+      method: 'DELETE',
+      url: `/teams/${team.id}/documents/${document.id}`,
+      headers: authCookie(admin.token),
+    })
+    expect(unassigned.statusCode).toBe(204)
+  })
+
+  test('a plain member cannot unshare when the team level is write — 403', async () => {
+    const ownerToken = await signInNewUser('unshare-writeowner')
+    const team = await createTeamAs(ownerToken, { name: 'Write team', accessLevel: 'write' })
+    const document = await createDocumentAs(ownerToken)
+    expect((await assignDocument(ownerToken, team.id, document.id)).statusCode).toBe(201)
+
+    const member = await signInNewUserWithId('unshare-writemember')
+    await addTeamMember(team.id, member.userId, 'member')
+
+    const unassigned = await app.inject({
+      method: 'DELETE',
+      url: `/teams/${team.id}/documents/${document.id}`,
+      headers: authCookie(member.token),
+    })
+    expect(unassigned.statusCode).toBe(403)
+  })
+
+  test('a plain member CAN unshare when the team level is delete', async () => {
+    const ownerToken = await signInNewUser('unshare-deleteowner')
+    const team = await createTeamAs(ownerToken, { name: 'Delete team', accessLevel: 'delete' })
+    const document = await createDocumentAs(ownerToken)
+    expect((await assignDocument(ownerToken, team.id, document.id)).statusCode).toBe(201)
+
+    const member = await signInNewUserWithId('unshare-deletemember')
+    await addTeamMember(team.id, member.userId, 'member')
+
+    const unassigned = await app.inject({
+      method: 'DELETE',
+      url: `/teams/${team.id}/documents/${document.id}`,
+      headers: authCookie(member.token),
+    })
+    expect(unassigned.statusCode).toBe(204)
+  })
+
+  test('unsharing a pair that was never shared is a 404', async () => {
+    const token = await signInNewUser('unshare-neverowner')
+    const team = await createTeamAs(token, { name: 'Never shared' })
+    const document = await createDocumentAs(token)
+
+    // Owner + team both exist and the caller owns the doc, but no share row exists.
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/teams/${team.id}/documents/${document.id}`,
+      headers: authCookie(token),
+    })
+    expect(response.statusCode).toBe(404)
   })
 })
