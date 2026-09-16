@@ -4,10 +4,12 @@ import { RequireAuth } from './auth/RequireAuth'
 import { DashboardPage } from './pages/DashboardPage'
 import { DocumentEditorPage } from './pages/DocumentEditorPage'
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
+import { InviteAcceptPage } from './pages/InviteAcceptPage'
 import { LoginPage } from './pages/LoginPage'
 import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { SecurityPage } from './pages/SecurityPage'
 import { SignupPage } from './pages/SignupPage'
+import { TeamPage } from './pages/TeamPage'
 import { TwoFactorPage } from './pages/TwoFactorPage'
 
 export const App = () => (
@@ -20,6 +22,9 @@ export const App = () => (
         <Route path="/signup" element={<SignupPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        {/* Public: the emailed invite link lands here. Previewing an invite must work logged-out (the
+            token in the URL is the capability), so this is NOT wrapped in RequireAuth. */}
+        <Route path="/invite" element={<InviteAcceptPage />} />
         <Route
           path="/"
           element={
@@ -33,6 +38,16 @@ export const App = () => (
           element={
             <RequireAuth>
               <SecurityPage />
+            </RequireAuth>
+          }
+        />
+        {/* Singular /team/:teamId — deliberately NOT a prefix of the API-proxied /teams, so a full page
+            load here isn't forwarded to the API. The app owns /team/:teamId; the API owns /teams/:teamId. */}
+        <Route
+          path="/team/:teamId"
+          element={
+            <RequireAuth>
+              <TeamPage />
             </RequireAuth>
           }
         />

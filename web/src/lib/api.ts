@@ -176,10 +176,25 @@ export type DocumentMeta = {
 
 export const API_listDocuments = (): Promise<{ documents: DocumentMeta[] }> => request('/documents')
 
-// One document's metadata (for the editor header). A 404 (not yours / unknown) surfaces as an ApiError
-// with status 404 — the editor page shows a not-found state rather than opening a blank doc.
-export const API_getDocument = (id: string): Promise<{ document: DocumentMeta }> =>
-  request(`/documents/${id}`)
+// The caller's effective access to a document, as GET /documents/:id reports it: 'owner' (full), or the
+// team access level they reach it through. Mirrors the server's DocumentAccess. 'owner' isn't a team level,
+// so it gets its own named constant rather than folding into the team-level mirror.
+export const CLIENT_DOCUMENT_ACCESS_OWNER = 'owner'
+export type ClientDocumentAccess = typeof CLIENT_DOCUMENT_ACCESS_OWNER | ClientTeamAccessLevel
+
+// Whether an access permits editing — owner or write/delete; read is view-only. Mirrors the server's
+// canWriteDocument, so the editor goes read-only in exactly the cases the server would drop the write.
+export const canEditWithAccess = (access: ClientDocumentAccess): boolean =>
+  access === CLIENT_DOCUMENT_ACCESS_OWNER ||
+  access === CLIENT_TEAM_ACCESS_LEVELS.write ||
+  access === CLIENT_TEAM_ACCESS_LEVELS.delete
+
+// One document's metadata plus the caller's own access to it (for the editor header + read-only gating). A
+// 404 (unreachable / unknown) surfaces as an ApiError with status 404 — the editor page shows a not-found
+// state rather than opening a blank doc.
+export const API_getDocument = (
+  id: string,
+): Promise<{ document: DocumentMeta; access: ClientDocumentAccess }> => request(`/documents/${id}`)
 
 // No title sends `{}`, so the server applies its default ('Untitled document').
 export const API_createDocument = (
@@ -198,3 +213,140 @@ export const API_renameDocument = (
 
 export const API_deleteDocument = (id: string): Promise<null> =>
   request(`/documents/${id}`, { method: 'DELETE' })
+
+// A team a document is shared into, as the Share panel's checkbox rows read it — the team plus its access
+// level ("Design · write access"). Mirrors the server's DocumentTeamListItem.
+export type DocumentTeamShare = {
+  id: string
+  name: string
+  accessLevel: ClientTeamAccessLevel
+}
+
+// The teams a document is shared into. Owner-only (a non-owner gets 403 → ApiError); the dashboard lists
+// only owned documents, so the Share control is only ever reached for a document the caller owns.
+export const API_getDocumentTeams = (id: string): Promise<{ teams: DocumentTeamShare[] }> =>
+  request(`/documents/${id}/teams`)
+
+// Share a document into a team. Member+ on the team AND you own the document; a re-share is a 409 (already
+// shared) → ApiError. Returns the shared document's metadata.
+export const API_assignDocumentToTeam = (
+  teamId: string,
+  documentId: string,
+): Promise<{ document: DocumentMeta }> =>
+  request(`/teams/${teamId}/documents`, { method: 'POST', body: JSON.stringify({ documentId }) })
+
+// Unshare a document from a team. Allowed for the document owner (always the case from the dashboard).
+export const API_unassignDocumentFromTeam = (teamId: string, documentId: string): Promise<null> =>
+  request(`/teams/${teamId}/documents/${documentId}`, { method: 'DELETE' })
+
+// --- teams ---
+
+// The team's access level (its ceiling over shared documents) and a member's role. The frontend's OWN
+// copy of the backend's team_access_level / team_role enums — importing the server's from db/schema.ts
+// would drag drizzle-orm into the client bundle. The CLIENT_ prefix marks these as independent mirrors
+// of one wire contract (not a shared source), and naming each value once keeps call sites off bare
+// 'read'/'owner' strings a typo could break.
+export const CLIENT_TEAM_ACCESS_LEVELS = { read: 'read', write: 'write', delete: 'delete' } as const
+export type ClientTeamAccessLevel =
+  (typeof CLIENT_TEAM_ACCESS_LEVELS)[keyof typeof CLIENT_TEAM_ACCESS_LEVELS]
+
+export const CLIENT_TEAM_ROLES = { owner: 'owner', admin: 'admin', member: 'member' } as const
+export type ClientTeamRole = (typeof CLIENT_TEAM_ROLES)[keyof typeof CLIENT_TEAM_ROLES]
+
+// A team as the client holds it — the server's TeamSummary wire shape (no created_by_id). Dates arrive
+// as ISO strings over JSON. Named distinctly from the server types (TeamSummary/TeamWithRole) so nothing
+// in web/ can auto-import the wrong one across the boundary — same reason as DocumentMeta.
+export type TeamMeta = {
+  id: string
+  name: string
+  accessLevel: ClientTeamAccessLevel
+  createdAt: string
+  updatedAt: string
+}
+
+// A team in the list: the summary plus THIS user's role in it (the server joins the role in per caller).
+export type TeamListItem = TeamMeta & { role: ClientTeamRole }
+
+export const API_listTeams = (): Promise<{ teams: TeamListItem[] }> => request('/teams')
+
+// No access level sends just the name, so the server applies its default ('read', the safest ceiling).
+// The caller becomes the new team's owner server-side, so the response is a plain TeamMeta (no role).
+export const API_createTeam = (input: {
+  name: string
+  accessLevel?: ClientTeamAccessLevel
+}): Promise<{ team: TeamMeta }> =>
+  request('/teams', { method: 'POST', body: JSON.stringify(input) })
+
+// One team the caller is a member of, plus their own role in it — what the team page's header shows. A
+// non-member (or unknown id) is a 404 → ApiError, which the page renders as a not-found state.
+export const API_getTeam = (teamId: string): Promise<{ team: TeamMeta; role: ClientTeamRole }> =>
+  request(`/teams/${teamId}`)
+
+// A document shared into a team, as the team page lists it: the metadata plus who owns it (a team holds
+// documents from several members, so "shared by Ana" needs a name). ownerName is nullable — the client
+// falls back to a placeholder in that case.
+export type TeamDocumentListItem = DocumentMeta & { ownerName: string | null }
+
+// The documents shared into a team — member+ only (a non-member gets a 404 → ApiError).
+export const API_listTeamDocuments = (
+  teamId: string,
+): Promise<{ documents: TeamDocumentListItem[] }> => request(`/teams/${teamId}/documents`)
+
+// A team member as the team page's roster shows them. name is nullable (falls back to email); email is
+// shown because team members collaborate. Mirrors the server's TeamMemberSummary.
+export type TeamMemberListItem = {
+  userId: string
+  name: string | null
+  email: string
+  role: ClientTeamRole
+}
+
+// The team's members — member+ only (a non-member gets a 404 → ApiError).
+export const API_listTeamMembers = (teamId: string): Promise<{ members: TeamMemberListItem[] }> =>
+  request(`/teams/${teamId}/members`)
+
+// --- team invites ---
+
+// Only member and admin can arrive by invite — never owner, a team gains an owner by promotion (mirror
+// of the server's createInviteBody enum).
+export type ClientInvitableRole = typeof CLIENT_TEAM_ROLES.admin | typeof CLIENT_TEAM_ROLES.member
+
+// What the server returns for a freshly issued invite. The raw token is never in it — it lives only in
+// the recipient's email — so the UI can confirm "sent to X" but can never leak a joinable link.
+export type CreatedInvite = {
+  email: string
+  role: ClientInvitableRole
+  expiresAt: string
+}
+
+// Issue an invite: the server emails the recipient a single-use link. Admin+ on the team; conferring
+// admin additionally needs owner — both enforced server-side, surfacing as an ApiError 403 whose message
+// the form shows verbatim. The echoed email is the normalized (lowercased) address the server stored.
+export const API_createInvite = (
+  teamId: string,
+  input: { email: string; role: ClientInvitableRole },
+): Promise<{ invite: CreatedInvite }> =>
+  request(`/teams/${teamId}/invites`, { method: 'POST', body: JSON.stringify(input) })
+
+// The public preview of an invite (no session needed) — what the /invite page shows a visitor before
+// sign-in. Mirrors the server's TeamInvitePreview wire shape. An invalid or expired token surfaces as an
+// ApiError (code 'invalid_invite' / 'invite_expired'), which the page renders as a dead-link state.
+export type InvitePreview = {
+  teamId: string
+  teamName: string
+  email: string
+  role: ClientTeamRole
+}
+
+// Public: the token in the query string is the capability, so this rides no session. URL-encoded because
+// the raw token is a base64url string going into a query param.
+export const API_previewInvite = (token: string): Promise<{ invite: InvitePreview }> =>
+  request(`/teams/invites/preview?token=${encodeURIComponent(token)}`)
+
+// Accept an invite as the signed-in user. Rides the httpOnly session cookie; the server matches the
+// caller's email to the invite (a mismatch is an ApiError 403; a used/expired token a 400). Returns the
+// team just joined, so the caller can route onward.
+export const API_acceptInvite = (
+  token: string,
+): Promise<{ team: { teamId: string; teamName: string } }> =>
+  request('/teams/invites/accept', { method: 'POST', body: JSON.stringify({ token }) })

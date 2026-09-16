@@ -247,6 +247,153 @@ export const documentUpdatesTable = pgTable(
   (t) => [index('document_updates_doc_seq_idx').on(t.documentId, t.seq)],
 )
 
+/*
+ * Teams — permission groups that share documents (step 4)
+ *
+ *   users ──1──<── team_members >──many──1── teams   (a user is in many teams; a team has many members)
+ *
+ * A team is a named group with ONE access level (read | write | delete) — the ceiling on what its
+ * members may do to a document shared into it. Sharing documents into teams is a later milestone; this
+ * slice just creates teams and their memberships. A member also carries a ROLE (owner | admin | member)
+ * that governs the TEAM itself — who may invite, rename, or delete it — orthogonal to the access level.
+ *
+ * Ownership lives ONLY in the memberships: a team is "owned" by whoever holds an `owner`-role row, not
+ * by `teams.created_by_id`. That column is a historical footnote (set null when the creator is deleted),
+ * so a team outlives its creator as long as some owner-role member remains.
+ */
+
+// A member's authority OVER THE TEAM (invite / rename / delete) — distinct from the access level, which
+// is the team's authority over documents. Named once here so the pgEnum, the column, and the rank map in
+// teams/authz.ts all derive from these; a typo'd 'admn' anywhere is then a compile error, not a silent
+// mis-grant.
+export const TEAM_ROLES = { owner: 'owner', admin: 'admin', member: 'member' } as const
+export type TeamRole = (typeof TEAM_ROLES)[keyof typeof TEAM_ROLES]
+
+export const teamRoleEnum = pgEnum('team_role', [
+  TEAM_ROLES.owner,
+  TEAM_ROLES.admin,
+  TEAM_ROLES.member,
+])
+
+// The team's ceiling on what its members may do to a shared document: read ⊂ write ⊂ delete, an ordered
+// superset chain. Not enforced by anything in this slice (it only bites when documents are shared into
+// teams, a later milestone); stored now so every team is created with its level from day one.
+export const TEAM_ACCESS_LEVELS = { read: 'read', write: 'write', delete: 'delete' } as const
+export type TeamAccessLevel = (typeof TEAM_ACCESS_LEVELS)[keyof typeof TEAM_ACCESS_LEVELS]
+
+export const teamAccessLevelEnum = pgEnum('team_access_level', [
+  TEAM_ACCESS_LEVELS.read,
+  TEAM_ACCESS_LEVELS.write,
+  TEAM_ACCESS_LEVELS.delete,
+])
+
+export const teamsTable = pgTable('teams', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: text('name').notNull(),
+  accessLevel: teamAccessLevelEnum('access_level').notNull().default(TEAM_ACCESS_LEVELS.read),
+  // Who created the team — a footnote, NOT the authorization (that is an `owner`-role membership row).
+  // set null, where every other user FK in this file cascades: deleting the creator must not delete a
+  // team other people are still in, so the team survives with created_by_id nulled.
+  createdById: uuid('created_by_id').references(() => usersTable.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
+export const teamMembersTable = pgTable(
+  'team_members',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teamsTable.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
+    role: teamRoleEnum('role').notNull().default(TEAM_ROLES.member),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // One membership per (team, user): a user can't be in a team twice. The DB is the race-safe arbiter
+    // (a duplicate insert is a 23505 the data layer catches — not a check-then-insert two requests race).
+    uniqueIndex('team_members_team_user_unique').on(t.teamId, t.userId),
+    // "Which teams am I in?" — the sidebar's list — scans by user.
+    index('team_members_user_idx').on(t.userId),
+  ],
+)
+
+// A pending invitation for an email to join a team at a given role. Modeled on email_verification_tokens:
+// the PK is sha256(rawToken), so only the hash lives at rest and a DB leak yields no usable invite link —
+// the raw token rides in the emailed URL and is the capability. Scoped to (team, email, role): accepting
+// requires the caller's session email to match `email`, so a leaked link can't seat a different account.
+export const teamInvitesTable = pgTable(
+  'team_invites',
+  {
+    // sha256(rawToken); the invite link carries the raw token, exactly like email_verification_tokens.
+    id: text('id').primaryKey(),
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teamsTable.id, { onDelete: 'cascade' }),
+    // Lowercased in code before insert so the unique(team, email) key and the accept-time match are
+    // case-insensitive — Alice@x.com and alice@x.com are one invitee, not two.
+    email: text('email').notNull(),
+    // The role the invitee gets on accept. Never 'owner' (the route rejects that); a team gains owners
+    // only through promotion, never an invite. Stored as the same enum so a bad value can't be inserted.
+    role: teamRoleEnum('role').notNull(),
+    // Who sent it — cascade, so deleting that user clears their outstanding invites (unlike teams, an
+    // invite has no reason to outlive its sender).
+    invitedById: uuid('invited_by_id')
+      .notNull()
+      .references(() => usersTable.id, { onDelete: 'cascade' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // At most one live invite per (team, email): re-inviting is delete-then-insert, which also rotates the
+    // token so the previous link stops working. The unique key is the DB's race-safe guarantee of that.
+    uniqueIndex('team_invites_team_email_unique').on(t.teamId, t.email),
+    // "Which invites are outstanding for this team?" — the admin's pending list — scans by team.
+    index('team_invites_team_idx').on(t.teamId),
+  ],
+)
+
+/*
+ * Document ↔ team sharing (step 4 — M5) — the many-to-many join between documents and teams
+ *
+ *   documents ──1──<── document_teams >──many──1── teams   (a doc shared into many teams; a team holds many docs)
+ *
+ * A document always lives in its OWNER's private space; being shared into a team is ADDITIVE — a row here
+ * grants the team's members the team's access level over the doc, and removing the row revokes exactly that,
+ * never touching the owner's own access. Effective access for a user on a doc is resolved from these rows:
+ * owner → full; else the MAX access level over the teams that contain both the user and the doc (see
+ * documents/access.ts). A join table (not a team_id column on documents) is what lets one doc reach several
+ * teams at once — the whole point of "share with the design team AND the reviewers".
+ */
+export const documentTeamsTable = pgTable(
+  'document_teams',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documentsTable.id, { onDelete: 'cascade' }),
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teamsTable.id, { onDelete: 'cascade' }),
+    // Who shared it — a footnote, NOT the authorization to unshare (that's computed from doc ownership +
+    // team role in access.ts). set null like teams.created_by_id: deleting the sharer must not silently
+    // unshare the doc, so the assignment survives with added_by_id nulled.
+    addedById: uuid('added_by_id').references(() => usersTable.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // A doc is shared into a team at most once: re-assigning the same pair is not a second share. The DB is
+    // the race-safe arbiter — a duplicate insert is a 23505 the data layer turns into a 409, not a
+    // check-then-insert two requests race.
+    uniqueIndex('document_teams_document_team_unique').on(t.documentId, t.teamId),
+    // "Which documents does this team hold?" — the team page's document list — scans by team.
+    index('document_teams_team_idx').on(t.teamId),
+  ],
+)
+
 export type UserRow = typeof usersTable.$inferSelect
 export type NewUserRow = typeof usersTable.$inferInsert
 export type AccountRow = typeof accountsTable.$inferSelect
@@ -258,3 +405,11 @@ export type RecoveryCodeRow = typeof recoveryCodesTable.$inferSelect
 export type DocumentRow = typeof documentsTable.$inferSelect
 export type NewDocumentRow = typeof documentsTable.$inferInsert
 export type DocumentUpdateRow = typeof documentUpdatesTable.$inferSelect
+export type TeamRow = typeof teamsTable.$inferSelect
+export type NewTeamRow = typeof teamsTable.$inferInsert
+export type TeamMemberRow = typeof teamMembersTable.$inferSelect
+export type NewTeamMemberRow = typeof teamMembersTable.$inferInsert
+export type TeamInviteRow = typeof teamInvitesTable.$inferSelect
+export type NewTeamInviteRow = typeof teamInvitesTable.$inferInsert
+export type DocumentTeamRow = typeof documentTeamsTable.$inferSelect
+export type NewDocumentTeamRow = typeof documentTeamsTable.$inferInsert

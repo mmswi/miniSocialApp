@@ -2,14 +2,33 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { SESSION_COOKIE_NAME } from '../auth/cookies.ts'
 import { getSessionUser } from '../auth/session.ts'
-import { getDocumentForOwner } from '../documents/documents.ts'
+import {
+  type DocumentAccess,
+  canWriteDocument,
+  getDocumentAccessForUser,
+} from '../documents/access.ts'
 import { type DocRoom, type SyncConnection, joinRoom } from './doc-room.ts'
+
+// The effective access resolved at the upgrade, stashed for the connection handler — preValidation runs
+// first and resolves it, the handler (a separate callback) needs it to set the connection's write flag.
+// Same pattern as auth's `authSession` (route-helpers.ts): a per-request field on FastifyRequest.
+declare module 'fastify' {
+  interface FastifyRequest {
+    documentAccess?: DocumentAccess
+  }
+}
 
 const syncParams = z.object({ id: z.string().uuid() })
 
 // The realtime sync endpoint for one document. Path mirrors the REST route (/documents/:id/sync) so a
-// single Vite proxy entry forwards both, and the authorization is the SAME owner check the REST get
-// uses — there is no live room you couldn't also read over REST.
+// single Vite proxy entry forwards both. Access control is two gates, both reading the SAME effective
+// access the REST routes use:
+//   • JOIN gate (here, M5): the resolver decides who may open the room at all — owner OR a member of a team
+//     the doc is shared into. "Can read over REST" and "can join the room" are one computation, so they
+//     can't diverge. There is no live room you couldn't also read over REST.
+//   • WRITE gate (M6): the resolved access becomes the connection's `canEditDoc` (via canWriteDocument);
+//     doc-room.ts enforces it per message, dropping a read-level connection's edits while still letting it
+//     receive. So a reader can join and watch, but not write — matching the REST PATCH 403.
 export const syncRoutes = async (app: FastifyInstance): Promise<void> => {
   app.get(
     '/documents/:id/sync',
@@ -17,7 +36,7 @@ export const syncRoutes = async (app: FastifyInstance): Promise<void> => {
       websocket: true,
       // Auth-on-upgrade: this runs BEFORE the socket opens, so an unauthorized client never gets a live
       // connection — it gets a clean HTTP error on the upgrade instead. Same non-oracle rule as REST: a
-      // doc that isn't yours is 404, never 403.
+      // doc you can't reach is 404, never 403.
       preValidation: async (req, reply) => {
         const parsed = syncParams.safeParse(req.params)
         if (!parsed.success) {
@@ -28,22 +47,31 @@ export const syncRoutes = async (app: FastifyInstance): Promise<void> => {
         if (active === null) {
           return reply.code(401).send({ error: 'not_authenticated' })
         }
-        const document = await getDocumentForOwner({
+        const resolved = await getDocumentAccessForUser({
           documentId: parsed.data.id,
-          ownerId: active.userId,
+          userId: active.userId,
         })
-        if (document === null) {
+        if (resolved === null) {
           return reply.code(404).send({ error: 'document_not_found' })
         }
+        // Hand the resolved access to the connection handler below (it can't re-resolve without a second
+        // query). The handler turns it into the per-message write flag.
+        req.documentAccess = resolved.access
       },
     },
     (socket, req) => {
       const documentId = (req.params as { id: string }).id
 
+      // The write flag for this connection, from the access preValidation resolved. Fail closed: if the
+      // field is somehow unset (it never is on this path — preValidation returns early on every failure),
+      // treat the connection as read-only rather than silently writable.
+      const canEditDoc = req.documentAccess !== undefined && canWriteDocument(req.documentAccess)
+
       // Adapt the ws socket to the room's minimal connection interface. The protocol is binary, so the
       // bytes go out as a binary frame; ws sends a Uint8Array as binary. Guard on readyState so a
       // broadcast to a socket that just closed is a no-op instead of a throw inside the room.
       const connection: SyncConnection = {
+        canEditDoc,
         send: (data) => {
           if (socket.readyState === socket.OPEN) {
             socket.send(data)

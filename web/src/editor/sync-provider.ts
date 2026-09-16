@@ -55,7 +55,7 @@ export const createSyncProvider = (input: {
     onStatusChange?.(status)
   }
 
-  const send = (data: Uint8Array): void => {
+  const send = (data: ArrayBufferView<ArrayBuffer>): void => {
     if (socket !== null && socket.readyState === WebSocket.OPEN) {
       socket.send(data)
     }

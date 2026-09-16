@@ -9,7 +9,7 @@ import {
   type SyncProvider,
   createSyncProvider,
 } from '../editor/sync-provider'
-import { API_getDocument, ApiError } from '../lib/api'
+import { API_getDocument, ApiError, type ClientDocumentAccess, canEditWithAccess } from '../lib/api'
 
 // A small fixed palette; each user gets a stable color from their id, so the same person is the same
 // color in everyone's editor. ?? keeps the return a string under noUncheckedIndexedAccess.
@@ -53,6 +53,7 @@ export const DocumentEditorPage = () => {
   const [status, setStatus] = useState<ConnectionStatus>('connecting')
   const [session, setSession] = useState<EditorSession | null>(null)
   const [title, setTitle] = useState<string | null>(null)
+  const [access, setAccess] = useState<ClientDocumentAccess | null>(null)
   const [notFound, setNotFound] = useState(false)
 
   // Create the Y.Doc + provider INSIDE the effect (not useMemo), so the lifecycle is StrictMode-safe:
@@ -72,15 +73,20 @@ export const DocumentEditorPage = () => {
     }
   }, [documentId])
 
-  // The title is metadata over REST; the document CONTENT arrives over the ws sync. A 404 means the
-  // doc is unknown or not the caller's — show a not-found state instead of an empty editor.
+  // The title AND the caller's access are metadata over REST; the document CONTENT arrives over the ws
+  // sync. A 404 means the doc is unreachable (unknown, or shared with no team of yours) — show a not-found
+  // state instead of an empty editor. Access is fetched here so the editor mounts already knowing whether
+  // it's editable, rather than flipping to read-only after the fact.
   useEffect(() => {
     let active = true
     setNotFound(false)
+    setTitle(null)
+    setAccess(null)
     API_getDocument(documentId)
-      .then(({ document }) => {
+      .then(({ document, access: documentAccess }) => {
         if (active) {
           setTitle(document.title)
+          setAccess(documentAccess)
         }
       })
       .catch((error: unknown) => {
@@ -101,13 +107,19 @@ export const DocumentEditorPage = () => {
   if (notFound) {
     return (
       <div className="mx-auto max-w-3xl px-4 py-10">
-        <p className="text-slate-600">This document doesn’t exist, or it isn’t yours.</p>
+        <p className="text-slate-600">This document doesn’t exist, or you don’t have access.</p>
         <Link to="/" className="mt-2 inline-block text-sm font-medium text-slate-800 underline">
           Back to your documents
         </Link>
       </div>
     )
   }
+
+  // Access is known once the metadata fetch resolves. Until then we hold the editor on "Loading editor…"
+  // rather than mount it editable and flip to read-only after — so a read-only viewer never gets a
+  // momentary editable surface. canEdit mirrors the server's write rule; isViewOnly drives the UI cues.
+  const canEdit = access !== null && canEditWithAccess(access)
+  const isViewOnly = access !== null && !canEdit
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8">
@@ -119,24 +131,34 @@ export const DocumentEditorPage = () => {
           <h1 className="text-lg font-semibold">
             {title === null ? (
               <span className="text-slate-400">Loading…</span>
-            ) : (
+            ) : canEdit ? (
+              // Rename requires write+ (the server 403s a reader's PATCH), so a read-only viewer gets a
+              // static title, not the editable DocumentTitle.
               <DocumentTitle documentId={documentId} title={title} onRenamed={setTitle} />
+            ) : (
+              <span>{title}</span>
             )}
           </h1>
         </div>
         <span className="flex items-center gap-2 text-xs text-slate-500">
+          {isViewOnly ? (
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-600">
+              View only
+            </span>
+          ) : null}
           <span className={`inline-block h-2 w-2 rounded-full ${STATUS_DOT[status]}`} />
           {STATUS_LABEL[status]}
         </span>
       </header>
 
       <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-        {session ? (
+        {session && access !== null ? (
           <CollaborativeEditor
             doc={session.doc}
             provider={session.provider}
             userName={user.name ?? user.email}
             userColor={colorForUser(user.id)}
+            editable={canEdit}
           />
         ) : (
           <p className="py-8 text-center text-sm text-slate-500">Loading editor…</p>
