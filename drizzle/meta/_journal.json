@@ -50,6 +50,13 @@
       "when": 1784656823870,
       "tag": "0006_document_teams",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790343902834,
+      "tag": "0007_team_roles_v2",
+      "breakpoints": true
     }
   ]
 }

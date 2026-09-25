@@ -7,11 +7,11 @@ import { AppError } from '../lib/errors.ts'
 import { TEAM_ROLE_RANK, getTeamRole, requireTeamRole } from './authz.ts'
 import { createTeam } from './teams.ts'
 
-// An owner (the team's creator) and a stranger we selectively add as a plain member to exercise the
+// The superadmin (the team's creator) and a stranger we selectively add as a plain member to exercise the
 // under-rank path. Real Postgres, throwaway rows, cleaned up afterward.
-const ownerEmail = `authz-owner-${randomUUID()}@example.test`
+const superadminEmail = `authz-superadmin-${randomUUID()}@example.test`
 const strangerEmail = `authz-stranger-${randomUUID()}@example.test`
-let ownerId = ''
+let superadminId = ''
 let strangerId = ''
 const createdTeamIds: string[] = []
 
@@ -38,14 +38,14 @@ const captureAppError = async (run: () => Promise<unknown>): Promise<AppError> =
 beforeAll(async () => {
   const seeded = await db
     .insert(usersTable)
-    .values([{ email: ownerEmail }, { email: strangerEmail }])
+    .values([{ email: superadminEmail }, { email: strangerEmail }])
     .returning()
-  const owner = seeded.find((u) => u.email === ownerEmail)
+  const superadmin = seeded.find((u) => u.email === superadminEmail)
   const stranger = seeded.find((u) => u.email === strangerEmail)
-  if (owner === undefined || stranger === undefined) {
+  if (superadmin === undefined || stranger === undefined) {
     throw new Error('failed to seed test users')
   }
-  ownerId = owner.id
+  superadminId = superadmin.id
   strangerId = stranger.id
 })
 
@@ -53,29 +53,30 @@ afterAll(async () => {
   if (createdTeamIds.length > 0) {
     await db.delete(teamsTable).where(inArray(teamsTable.id, createdTeamIds))
   }
-  await db.delete(usersTable).where(inArray(usersTable.email, [ownerEmail, strangerEmail]))
+  await db.delete(usersTable).where(inArray(usersTable.email, [superadminEmail, strangerEmail]))
 })
 
 describe('team authz', () => {
-  test('the role rank orders owner over admin over member', () => {
-    expect(TEAM_ROLE_RANK[TEAM_ROLES.owner]).toBeGreaterThan(TEAM_ROLE_RANK[TEAM_ROLES.admin])
+  test('the role rank orders superadmin over admin over member over viewer', () => {
+    expect(TEAM_ROLE_RANK[TEAM_ROLES.superadmin]).toBeGreaterThan(TEAM_ROLE_RANK[TEAM_ROLES.admin])
     expect(TEAM_ROLE_RANK[TEAM_ROLES.admin]).toBeGreaterThan(TEAM_ROLE_RANK[TEAM_ROLES.member])
+    expect(TEAM_ROLE_RANK[TEAM_ROLES.member]).toBeGreaterThan(TEAM_ROLE_RANK[TEAM_ROLES.viewer])
   })
 
-  test('getTeamRole returns the creator’s owner role and null for a non-member', async () => {
-    const teamId = await makeTeam(ownerId)
-    expect(await getTeamRole({ teamId, userId: ownerId })).toBe(TEAM_ROLES.owner)
+  test('getTeamRole returns the creator’s superadmin role and null for a non-member', async () => {
+    const teamId = await makeTeam(superadminId)
+    expect(await getTeamRole({ teamId, userId: superadminId })).toBe(TEAM_ROLES.superadmin)
     expect(await getTeamRole({ teamId, userId: strangerId })).toBeNull()
   })
 
   test('requireTeamRole returns the caller’s role when they meet the floor', async () => {
-    const teamId = await makeTeam(ownerId)
-    const role = await requireTeamRole({ teamId, userId: ownerId, atLeast: TEAM_ROLES.member })
-    expect(role).toBe(TEAM_ROLES.owner)
+    const teamId = await makeTeam(superadminId)
+    const role = await requireTeamRole({ teamId, userId: superadminId, atLeast: TEAM_ROLES.member })
+    expect(role).toBe(TEAM_ROLES.superadmin)
   })
 
   test('requireTeamRole answers a non-member with 404, not 403 — no existence oracle', async () => {
-    const teamId = await makeTeam(ownerId)
+    const teamId = await makeTeam(superadminId)
     const error = await captureAppError(() =>
       requireTeamRole({ teamId, userId: strangerId, atLeast: TEAM_ROLES.member }),
     )
@@ -84,14 +85,14 @@ describe('team authz', () => {
   })
 
   test('requireTeamRole answers an under-rank member with 403, and the team stays visible', async () => {
-    const teamId = await makeTeam(ownerId)
-    // The stranger is a plain member — they can see the team, but not act as an owner.
+    const teamId = await makeTeam(superadminId)
+    // The stranger is a plain member — they can see the team, but not act as the superadmin.
     await db
       .insert(teamMembersTable)
       .values({ teamId, userId: strangerId, role: TEAM_ROLES.member })
 
     const error = await captureAppError(() =>
-      requireTeamRole({ teamId, userId: strangerId, atLeast: TEAM_ROLES.owner }),
+      requireTeamRole({ teamId, userId: strangerId, atLeast: TEAM_ROLES.superadmin }),
     )
     expect(error.statusCode).toBe(403)
     expect(error.code).toBe('insufficient_team_role')

@@ -33,9 +33,9 @@ const toTeamSummary = (row: TeamRow): TeamSummary => ({
   updatedAt: row.updatedAt,
 })
 
-// Create a team and, in the SAME transaction, seat the creator as its first owner. The two inserts are
-// atomic on purpose: a team must never exist without an owner-role member, or it would be un-manageable
-// and un-deletable (every team route authorizes off memberships, not created_by_id). Passing
+// Create a team and, in the SAME transaction, seat the creator as its superadmin. The two inserts are
+// atomic on purpose: a team must never exist without its superadmin, or it would be un-manageable and
+// un-deletable (every team route authorizes off memberships, not created_by_id). Passing
 // accessLevel: undefined omits the column so the DB default ('read', the safest ceiling) applies.
 export const createTeam = async (input: {
   name: string
@@ -52,7 +52,7 @@ export const createTeam = async (input: {
     }
     await tx
       .insert(teamMembersTable)
-      .values({ teamId: team.id, userId: input.creatorId, role: TEAM_ROLES.owner })
+      .values({ teamId: team.id, userId: input.creatorId, role: TEAM_ROLES.superadmin })
     return toTeamSummary(team)
   })
 }

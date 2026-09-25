@@ -2,10 +2,12 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
+import { isUniqueViolation } from '../db/errors.ts'
 import {
   TEAM_ACCESS_LEVELS,
   TEAM_ROLES,
   type TeamAccessLevel,
+  teamMembersTable,
   teamsTable,
   usersTable,
 } from '../db/schema.ts'
@@ -75,14 +77,33 @@ afterAll(async () => {
 })
 
 describe('teams data access', () => {
-  test('a created team seats the creator as its owner and defaults to read access', async () => {
+  test('a created team seats the creator as its superadmin and defaults to read access', async () => {
     const team = await makeTeam({ name: 'Design crew', creatorId })
     expect(team.name).toBe('Design crew')
     expect(team.accessLevel).toBe(TEAM_ACCESS_LEVELS.read)
 
     // The authorization that matters is the membership, not created_by_id.
     const membership = await getTeamForMember({ teamId: team.id, userId: creatorId })
-    expect(membership?.role).toBe(TEAM_ROLES.owner)
+    expect(membership?.role).toBe(TEAM_ROLES.superadmin)
+  })
+
+  test('the database refuses a second superadmin in the same team', async () => {
+    const team = await makeTeam({ name: 'One at the top', creatorId })
+    const secondSuperadminInsert = db
+      .insert(teamMembersTable)
+      .values({ teamId: team.id, userId: strangerId, role: TEAM_ROLES.superadmin })
+    const insertError = await secondSuperadminInsert.then(
+      () => null,
+      (error: unknown) => error,
+    )
+    expect(isUniqueViolation(insertError)).toBe(true)
+
+    // Other roles are not limited: the same user joins fine as an admin.
+    await db
+      .insert(teamMembersTable)
+      .values({ teamId: team.id, userId: strangerId, role: TEAM_ROLES.admin })
+    const strangerMembership = await getTeamForMember({ teamId: team.id, userId: strangerId })
+    expect(strangerMembership?.role).toBe(TEAM_ROLES.admin)
   })
 
   test('an explicit access level is stored as given', async () => {
@@ -111,7 +132,7 @@ describe('teams data access', () => {
 
     const listed = await listTeamsForUser(isolatedId)
     expect(listed.map((t) => t.id)).toEqual([second.id, first.id])
-    expect(listed.every((t) => t.role === TEAM_ROLES.owner)).toBe(true)
+    expect(listed.every((t) => t.role === TEAM_ROLES.superadmin)).toBe(true)
   })
 
   test('a stranger’s list excludes a team they were never added to', async () => {

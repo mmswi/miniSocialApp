@@ -9,15 +9,17 @@ import {
 } from '../db/schema.ts'
 import { forbidden, notFound } from '../lib/errors.ts'
 
-// Team roles are ordered: owner ⊃ admin ⊃ member. A guard asks "at least this rank?", so each role needs
-// a comparable number. This rank map is deliberately in TS, NOT SQL `max()` over the pg enum: an enum's
-// implicit numeric value is its declaration order, which would silently couple "who outranks whom" to the
-// order the enum happens to list its members. Rank is a domain rule — it belongs in code, where it reads.
-// Typed as Record<TeamRole, number> so adding a role without ranking it is a compile error, not a 0.
+// Team roles are ordered: superadmin ⊃ admin ⊃ member ⊃ viewer. A guard asks "at least this rank?", so
+// each role needs a comparable number. This rank map is deliberately in TS, NOT SQL `max()` over the pg
+// enum: an enum's implicit numeric value is its declaration order, which would silently couple "who
+// outranks whom" to the order the enum happens to list its members. Rank is a domain rule — it belongs in
+// code, where it reads. Typed as Record<TeamRole, number> so adding a role without ranking it is a compile
+// error, not a 0.
 export const TEAM_ROLE_RANK: Record<TeamRole, number> = {
-  [TEAM_ROLES.member]: 1,
-  [TEAM_ROLES.admin]: 2,
-  [TEAM_ROLES.owner]: 3,
+  [TEAM_ROLES.viewer]: 1,
+  [TEAM_ROLES.member]: 2,
+  [TEAM_ROLES.admin]: 3,
+  [TEAM_ROLES.superadmin]: 4,
 }
 
 // The access-level chain read ⊂ write ⊂ delete, ranked for the same reason and the same way as roles: rank

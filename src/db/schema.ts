@@ -1,4 +1,5 @@
 import type { AuthenticatorTransportFuture } from '@simplewebauthn/server'
+import { sql } from 'drizzle-orm'
 import {
   bigint,
   bigserial,
@@ -262,17 +263,23 @@ export const documentUpdatesTable = pgTable(
  * so a team outlives its creator as long as some owner-role member remains.
  */
 
-// A member's authority OVER THE TEAM (invite / rename / delete) — distinct from the access level, which
-// is the team's authority over documents. Named once here so the pgEnum, the column, and the rank map in
-// teams/authz.ts all derive from these; a typo'd 'admn' anywhere is then a compile error, not a silent
-// mis-grant.
-export const TEAM_ROLES = { owner: 'owner', admin: 'admin', member: 'member' } as const
+// A member's role in a team — everything they may do there comes from it: a viewer reads, a member also
+// edits, an admin also manages members, and the one superadmin also deletes the team and hands the role
+// over. Named once here so the pgEnum, the column, and the rank map in teams/authz.ts all derive from
+// these; a typo'd 'admn' anywhere is then a compile error, not a silent mis-grant.
+export const TEAM_ROLES = {
+  superadmin: 'superadmin',
+  admin: 'admin',
+  member: 'member',
+  viewer: 'viewer',
+} as const
 export type TeamRole = (typeof TEAM_ROLES)[keyof typeof TEAM_ROLES]
 
 export const teamRoleEnum = pgEnum('team_role', [
-  TEAM_ROLES.owner,
+  TEAM_ROLES.superadmin,
   TEAM_ROLES.admin,
   TEAM_ROLES.member,
+  TEAM_ROLES.viewer,
 ])
 
 // The team's ceiling on what its members may do to a shared document: read ⊂ write ⊂ delete, an ordered
@@ -316,6 +323,13 @@ export const teamMembersTable = pgTable(
     // One membership per (team, user): a user can't be in a team twice. The DB is the race-safe arbiter
     // (a duplicate insert is a 23505 the data layer catches — not a check-then-insert two requests race).
     uniqueIndex('team_members_team_user_unique').on(t.teamId, t.userId),
+    // At most one superadmin per team: the WHERE makes the index cover only superadmin rows, so a second
+    // superadmin in the same team is a 23505, whatever code path tries it. "At least one" is createTeam's
+    // job (team + superadmin in one transaction). sql.raw because drizzle-kit writes a bound parameter into
+    // the migration as a literal `$1` instead of the value.
+    uniqueIndex('team_members_one_superadmin')
+      .on(t.teamId)
+      .where(sql`${t.role} = ${sql.raw(`'${TEAM_ROLES.superadmin}'`)}`),
     // "Which teams am I in?" — the sidebar's list — scans by user.
     index('team_members_user_idx').on(t.userId),
   ],

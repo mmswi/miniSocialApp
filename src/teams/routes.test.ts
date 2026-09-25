@@ -85,7 +85,7 @@ const signInNewUserWithId = async (prefix: string): Promise<{ token: string; use
   return { token, userId: user.id }
 }
 
-// Seat a user in a team at a given role directly — the create-team flow only ever mints owners, so the
+// Seat a user in a team at a given role directly — the create-team flow only ever mints superadmins, so the
 // member/admin cases of the unassign matrix need this. Deleting the team (cleanup) cascades the row.
 const addTeamMember = async (
   teamId: string,
@@ -146,15 +146,15 @@ describe('/teams', () => {
     )
   })
 
-  test('create → list → get round-trips for the creator, who is the owner', async () => {
-    const token = await signInNewUser('team-owner')
+  test('create → list → get round-trips for the creator, who is the superadmin', async () => {
+    const token = await signInNewUser('team-superadmin')
     const created = await createTeamAs(token, { name: 'Launch team' })
     expect(created.name).toBe('Launch team')
 
     const listed = await app.inject({ method: 'GET', url: '/teams', headers: authCookie(token) })
     const { teams } = listed.json<{ teams: { id: string; role: string }[] }>()
     expect(teams.map((t) => t.id)).toContain(created.id)
-    expect(teams.find((t) => t.id === created.id)?.role).toBe('owner')
+    expect(teams.find((t) => t.id === created.id)?.role).toBe('superadmin')
 
     const fetched = await app.inject({
       method: 'GET',
@@ -164,7 +164,7 @@ describe('/teams', () => {
     expect(fetched.statusCode).toBe(200)
     const body = fetched.json<{ team: { name: string }; role: string }>()
     expect(body.team.name).toBe('Launch team')
-    expect(body.role).toBe('owner')
+    expect(body.role).toBe('superadmin')
   })
 
   test('a team with no access level defaults to read', async () => {
@@ -196,8 +196,8 @@ describe('/teams', () => {
   })
 
   test("a non-member gets 404 for someone else's team — never 403, no existence oracle", async () => {
-    const ownerToken = await signInNewUser('team-secret-owner')
-    const created = await createTeamAs(ownerToken, { name: 'secret' })
+    const superadminToken = await signInNewUser('team-secret-superadmin')
+    const created = await createTeamAs(superadminToken, { name: 'secret' })
 
     const strangerToken = await signInNewUser('team-stranger')
     const asStranger = await app.inject({
@@ -228,19 +228,19 @@ describe('/teams', () => {
   })
 
   test('members list: a member sees the roster; a non-member gets 404', async () => {
-    const ownerToken = await signInNewUser('members-owner')
-    const team = await createTeamAs(ownerToken, { name: 'Roster' })
+    const superadminToken = await signInNewUser('members-superadmin')
+    const team = await createTeamAs(superadminToken, { name: 'Roster' })
     const member = await signInNewUserWithId('members-member')
     await addTeamMember(team.id, member.userId, 'member')
 
     const listed = await app.inject({
       method: 'GET',
       url: `/teams/${team.id}/members`,
-      headers: authCookie(ownerToken),
+      headers: authCookie(superadminToken),
     })
     expect(listed.statusCode).toBe(200)
     const { members } = listed.json<{ members: { userId: string; role: string }[] }>()
-    expect(members.map((m) => m.role).sort()).toEqual(['member', 'owner'])
+    expect(members.map((m) => m.role).sort()).toEqual(['member', 'superadmin'])
     expect(members.some((m) => m.userId === member.userId)).toBe(true)
 
     const strangerToken = await signInNewUser('members-stranger')

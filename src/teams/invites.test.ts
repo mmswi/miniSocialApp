@@ -9,7 +9,7 @@ import { sentEmails } from '../lib/email.ts'
 import { buildServer } from '../server.ts'
 
 // Integration tests against the real /teams invite routes through Fastify's in-process inject. Sessions are
-// earned the way a real user does — sign up, then log in — so we can act as owner, admin, member, and
+// earned the way a real user does — sign up, then log in — so we can act as superadmin, admin, member, and
 // stranger. Throwaway emails + teams, cleaned up afterward (deleting a team cascades its invites/members).
 const app = buildServer()
 const createdEmails: string[] = []
@@ -142,8 +142,8 @@ describe('team invites', () => {
   })
 
   test('a non-member gets 404, never 403, on EVERY team-scoped invite route — no existence oracle', async () => {
-    const owner = await signInNewUser('inv-owner')
-    const teamId = await createTeamAs(owner, { name: 'Private' })
+    const superadmin = await signInNewUser('inv-superadmin')
+    const teamId = await createTeamAs(superadmin, { name: 'Private' })
     const stranger = await signInNewUser('inv-stranger')
 
     // Invite (POST), list (GET), and revoke (DELETE) all guard on membership first, so a stranger can't
@@ -166,11 +166,11 @@ describe('team invites', () => {
     expect(revoke.statusCode).toBe(404)
   })
 
-  test('owner invites → row stored as a hash only, email carries the link, preview reads it back', async () => {
-    const owner = await signInNewUser('inv-hash-owner')
-    const teamId = await createTeamAs(owner, { name: 'Hashers' })
+  test('the superadmin invites → row stored as a hash only, email carries the link, preview reads it back', async () => {
+    const superadmin = await signInNewUser('inv-hash-superadmin')
+    const teamId = await createTeamAs(superadmin, { name: 'Hashers' })
     const invitee = uniqueEmail('inv-hash-target')
-    const { response, rawToken } = await inviteAs(owner, teamId, invitee, 'member')
+    const { response, rawToken } = await inviteAs(superadmin, teamId, invitee, 'member')
     expect(response.statusCode).toBe(201)
     if (rawToken === undefined) {
       throw new Error('expected an invite token in the email')
@@ -199,10 +199,10 @@ describe('team invites', () => {
   })
 
   test('accept seats the invitee, is single-use, and the membership is real', async () => {
-    const owner = await signInNewUser('inv-accept-owner')
-    const teamId = await createTeamAs(owner, { name: 'Joiners' })
+    const superadmin = await signInNewUser('inv-accept-superadmin')
+    const teamId = await createTeamAs(superadmin, { name: 'Joiners' })
     const invitee = await signInNewUser('inv-accept-target')
-    const { rawToken } = await inviteAs(owner, teamId, invitee.email, 'member')
+    const { rawToken } = await inviteAs(superadmin, teamId, invitee.email, 'member')
     if (rawToken === undefined) {
       throw new Error('expected an invite token')
     }
@@ -227,11 +227,11 @@ describe('team invites', () => {
   })
 
   test('accepting an invite addressed to a different email is 403 and does NOT consume the token', async () => {
-    const owner = await signInNewUser('inv-mismatch-owner')
-    const teamId = await createTeamAs(owner, { name: 'Bound' })
+    const superadmin = await signInNewUser('inv-mismatch-superadmin')
+    const teamId = await createTeamAs(superadmin, { name: 'Bound' })
     const intended = uniqueEmail('inv-mismatch-intended')
     const wrongPerson = await signInNewUser('inv-mismatch-wrong')
-    const { rawToken } = await inviteAs(owner, teamId, intended, 'member')
+    const { rawToken } = await inviteAs(superadmin, teamId, intended, 'member')
     if (rawToken === undefined) {
       throw new Error('expected an invite token')
     }
@@ -249,26 +249,26 @@ describe('team invites', () => {
   })
 
   test('inviting someone who is already a member is a 409, not a dead invite', async () => {
-    const owner = await signInNewUser('inv-dup-owner')
-    const teamId = await createTeamAs(owner, { name: 'Full house' })
+    const superadmin = await signInNewUser('inv-dup-superadmin')
+    const teamId = await createTeamAs(superadmin, { name: 'Full house' })
     const member = await signInNewUser('inv-dup-member')
-    const { rawToken } = await inviteAs(owner, teamId, member.email, 'member')
+    const { rawToken } = await inviteAs(superadmin, teamId, member.email, 'member')
     if (rawToken === undefined) {
       throw new Error('expected an invite token')
     }
     expect((await acceptAs(member, rawToken)).statusCode).toBe(200)
 
-    const { response } = await inviteAs(owner, teamId, member.email, 'member')
+    const { response } = await inviteAs(superadmin, teamId, member.email, 'member')
     expect(response.statusCode).toBe(409)
     expect(response.json<{ error: string }>().error).toBe('already_member')
   })
 
   test('re-inviting the same email rotates the token — the previous link stops working', async () => {
-    const owner = await signInNewUser('inv-rotate-owner')
-    const teamId = await createTeamAs(owner, { name: 'Rotators' })
+    const superadmin = await signInNewUser('inv-rotate-superadmin')
+    const teamId = await createTeamAs(superadmin, { name: 'Rotators' })
     const invitee = uniqueEmail('inv-rotate-target')
-    const first = await inviteAs(owner, teamId, invitee, 'member')
-    const second = await inviteAs(owner, teamId, invitee, 'member')
+    const first = await inviteAs(superadmin, teamId, invitee, 'member')
+    const second = await inviteAs(superadmin, teamId, invitee, 'member')
     if (first.rawToken === undefined || second.rawToken === undefined) {
       throw new Error('expected two invite tokens')
     }
@@ -287,15 +287,15 @@ describe('team invites', () => {
   })
 
   test('an expired invite previews as 400 invite_expired and the dead row is deleted', async () => {
-    const owner = await signInNewUser('inv-expired-owner')
-    const teamId = await createTeamAs(owner, { name: 'Lapsed' })
-    const [ownerRow] = await db
+    const superadmin = await signInNewUser('inv-expired-superadmin')
+    const teamId = await createTeamAs(superadmin, { name: 'Lapsed' })
+    const [superadminRow] = await db
       .select({ id: usersTable.id })
       .from(usersTable)
-      .where(eq(usersTable.email, owner.email))
+      .where(eq(usersTable.email, superadmin.email))
       .limit(1)
-    if (ownerRow === undefined) {
-      throw new Error('expected the owner user row')
+    if (superadminRow === undefined) {
+      throw new Error('expected the superadmin user row')
     }
     // Insert a past-dated invite directly — the 7-day TTL is too long to wait out in a test.
     const rawToken = generateToken()
@@ -305,7 +305,7 @@ describe('team invites', () => {
       teamId,
       email: uniqueEmail('inv-expired-target').toLowerCase(),
       role: 'member',
-      invitedById: ownerRow.id,
+      invitedById: superadminRow.id,
       expiresAt: new Date(Date.now() - 1000),
     })
 
@@ -324,13 +324,13 @@ describe('team invites', () => {
     expect(remaining.length).toBe(0)
   })
 
-  test('only an owner may invite an admin; an admin may invite a member but not a peer admin', async () => {
-    const owner = await signInNewUser('inv-role-owner')
-    const teamId = await createTeamAs(owner, { name: 'Ranks' })
+  test('only the superadmin may invite an admin; an admin may invite a member but not a peer admin', async () => {
+    const superadmin = await signInNewUser('inv-role-superadmin')
+    const teamId = await createTeamAs(superadmin, { name: 'Ranks' })
 
-    // Owner promotes someone to admin via an admin invite → allowed.
+    // Superadmin promotes someone to admin via an admin invite → allowed.
     const adminToBe = await signInNewUser('inv-role-admin')
-    const asAdmin = await inviteAs(owner, teamId, adminToBe.email, 'admin')
+    const asAdmin = await inviteAs(superadmin, teamId, adminToBe.email, 'admin')
     expect(asAdmin.response.statusCode).toBe(201)
     if (asAdmin.rawToken === undefined) {
       throw new Error('expected an admin invite token')
@@ -341,19 +341,19 @@ describe('team invites', () => {
     const memberOk = await inviteAs(adminToBe, teamId, uniqueEmail('inv-role-member'), 'member')
     expect(memberOk.response.statusCode).toBe(201)
 
-    // ...but may NOT confer admin — only an owner can.
+    // ...but may NOT confer admin — only the superadmin can.
     const adminByAdmin = await inviteAs(adminToBe, teamId, uniqueEmail('inv-role-peer'), 'admin')
     expect(adminByAdmin.response.statusCode).toBe(403)
     expect(adminByAdmin.response.json<{ error: string }>().error).toBe(
-      'invite_admin_requires_owner',
+      'invite_admin_requires_superadmin',
     )
   })
 
   test('a plain member can neither invite nor list invites', async () => {
-    const owner = await signInNewUser('inv-member-owner')
-    const teamId = await createTeamAs(owner, { name: 'Gated' })
+    const superadmin = await signInNewUser('inv-member-superadmin')
+    const teamId = await createTeamAs(superadmin, { name: 'Gated' })
     const member = await signInNewUser('inv-member-plain')
-    const { rawToken } = await inviteAs(owner, teamId, member.email, 'member')
+    const { rawToken } = await inviteAs(superadmin, teamId, member.email, 'member')
     if (rawToken === undefined) {
       throw new Error('expected an invite token')
     }
@@ -371,10 +371,10 @@ describe('team invites', () => {
   })
 
   test('an admin lists and revokes an outstanding invite; the revoked link then fails', async () => {
-    const owner = await signInNewUser('inv-revoke-owner')
-    const teamId = await createTeamAs(owner, { name: 'Revocable' })
+    const superadmin = await signInNewUser('inv-revoke-superadmin')
+    const teamId = await createTeamAs(superadmin, { name: 'Revocable' })
     const invitee = uniqueEmail('inv-revoke-target')
-    const { rawToken } = await inviteAs(owner, teamId, invitee, 'member')
+    const { rawToken } = await inviteAs(superadmin, teamId, invitee, 'member')
     if (rawToken === undefined) {
       throw new Error('expected an invite token')
     }
@@ -382,7 +382,7 @@ describe('team invites', () => {
     const list = await app.inject({
       method: 'GET',
       url: `/teams/${teamId}/invites`,
-      headers: authCookie(owner.token),
+      headers: authCookie(superadmin.token),
     })
     expect(list.statusCode).toBe(200)
     const { invites } = list.json<{ invites: { id: string; email: string }[] }>()
@@ -395,7 +395,7 @@ describe('team invites', () => {
     const revoke = await app.inject({
       method: 'DELETE',
       url: `/teams/${teamId}/invites/${pending.id}`,
-      headers: authCookie(owner.token),
+      headers: authCookie(superadmin.token),
     })
     expect(revoke.statusCode).toBe(204)
 
@@ -409,14 +409,14 @@ describe('team invites', () => {
     const revokeAgain = await app.inject({
       method: 'DELETE',
       url: `/teams/${teamId}/invites/${pending.id}`,
-      headers: authCookie(owner.token),
+      headers: authCookie(superadmin.token),
     })
     expect(revokeAgain.statusCode).toBe(404)
   })
 
   test('accepting when already a member is idempotent — no duplicate row, invite still cleared', async () => {
-    const owner = await signInNewUser('inv-idem-owner')
-    const teamId = await createTeamAs(owner, { name: 'Idempotent' })
+    const superadmin = await signInNewUser('inv-idem-superadmin')
+    const teamId = await createTeamAs(superadmin, { name: 'Idempotent' })
     const member = await signInNewUser('inv-idem-member')
     const [memberRow] = await db
       .select({ id: usersTable.id })
@@ -457,20 +457,20 @@ describe('team invites', () => {
   })
 
   test('a malformed invite body is a 400 — bad email, and a role that is not member/admin', async () => {
-    const owner = await signInNewUser('inv-validate-owner')
-    const teamId = await createTeamAs(owner, { name: 'Strict' })
+    const superadmin = await signInNewUser('inv-validate-superadmin')
+    const teamId = await createTeamAs(superadmin, { name: 'Strict' })
     const badEmail = await app.inject({
       method: 'POST',
       url: `/teams/${teamId}/invites`,
-      headers: authCookie(owner.token),
+      headers: authCookie(superadmin.token),
       payload: { email: 'not-an-email', role: 'member' },
     })
     expect(badEmail.statusCode).toBe(400)
     const badRole = await app.inject({
       method: 'POST',
       url: `/teams/${teamId}/invites`,
-      headers: authCookie(owner.token),
-      payload: { email: 'ok@example.test', role: 'owner' },
+      headers: authCookie(superadmin.token),
+      payload: { email: 'ok@example.test', role: 'superadmin' },
     })
     expect(badRole.statusCode).toBe(400)
   })

@@ -117,16 +117,20 @@ export const teamRoutes = async (app: FastifyInstance): Promise<void> => {
     return { team, role }
   })
 
-  // Invite an email to the team. Admin+ may invite at all; only an owner may confer 'admin' (an admin can't
-  // mint a peer who could then remove them). requireTeamRole gives the null→404 / under-rank→403 split for
-  // free AND hands back the caller's own role — exactly what the owner-for-admin rule needs, no second read.
+  // Invite an email to the team. Admin+ may invite at all; only the superadmin may confer 'admin' (an admin
+  // can't mint a peer who could then remove them). requireTeamRole gives the null→404 / under-rank→403 split
+  // for free AND hands back the caller's own role — exactly what the superadmin-for-admin rule needs, no
+  // second read.
   app.post('/:teamId/invites', async (req, reply) => {
     const { userId } = getAuthUser(req)
     const { teamId } = parseOrThrow(teamIdParams, req.params)
     const input = parseOrThrow(createInviteBody, req.body)
     const callerRole = await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.admin })
-    if (input.role === TEAM_ROLES.admin && callerRole !== TEAM_ROLES.owner) {
-      throw forbidden('invite_admin_requires_owner', 'Only an owner can invite an admin.')
+    if (input.role === TEAM_ROLES.admin && callerRole !== TEAM_ROLES.superadmin) {
+      throw forbidden(
+        'invite_admin_requires_superadmin',
+        'Only the superadmin can invite an admin.',
+      )
     }
     // Name for the email body. The guard already proved the team exists and the caller may act on it, so a
     // null here is only a delete-mid-request race — reported as the same 404 a non-member would get.
