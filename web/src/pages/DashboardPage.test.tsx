@@ -25,11 +25,10 @@ const doc = (id: string, title: string): Record<string, string> => ({
 const jsonResponse = (body: unknown, status = 200) =>
   Promise.resolve({ ok: status < 400, status, json: async () => body })
 
-const team = (id: string, name: string, accessLevel = 'write'): Record<string, string> => ({
+const team = (id: string, name: string): Record<string, string> => ({
   id,
   name,
-  role: 'owner',
-  accessLevel,
+  role: 'superadmin',
   createdAt: '2026-06-01T00:00:00.000Z',
   updatedAt: '2026-06-20T00:00:00.000Z',
 })

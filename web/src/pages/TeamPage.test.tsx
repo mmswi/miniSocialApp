@@ -35,11 +35,10 @@ const stubApi = (input: {
   documents?: Record<string, unknown>[]
   members?: Record<string, unknown>[]
 }) => {
-  const role = input.role ?? 'owner'
+  const role = input.role ?? 'superadmin'
   const team = {
     id: 't-a',
     name: 'Design crew',
-    accessLevel: 'write',
     createdAt: '2026-06-01T00:00:00.000Z',
     updatedAt: '2026-06-20T00:00:00.000Z',
   }
@@ -98,10 +97,10 @@ describe('TeamPage', () => {
 
   test('shows the team header, its documents, and its members', async () => {
     stubApi({
-      role: 'owner',
+      role: 'superadmin',
       documents: [teamDoc('doc-a', 'Q3 Launch Plan', 'Ana')],
       members: [
-        { userId: 'u1', name: 'Me', email: 'me@example.test', role: 'owner' },
+        { userId: 'u1', name: 'Me', email: 'me@example.test', role: 'superadmin' },
         { userId: 'u2', name: null, email: 'sam@example.test', role: 'member' },
       ],
     })
@@ -128,15 +127,15 @@ describe('TeamPage', () => {
     ).toBeInTheDocument()
   })
 
-  test('the Invite control shows for an owner but not a plain member', async () => {
+  test('the Invite control is hidden from a plain member', async () => {
     stubApi({ role: 'member' })
     renderTeamPage()
     await screen.findByRole('heading', { name: 'Design crew' })
     expect(screen.queryByRole('button', { name: 'Invite' })).not.toBeInTheDocument()
   })
 
-  test('an owner can send an invite, confirming the recipient and collapsing the form', async () => {
-    stubApi({ role: 'owner' })
+  test('the superadmin can send an invite, confirming the recipient and collapsing the form', async () => {
+    stubApi({ role: 'superadmin' })
     renderTeamPage()
     await screen.findByRole('heading', { name: 'Design crew' })
 
@@ -148,13 +147,14 @@ describe('TeamPage', () => {
     expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
   })
 
-  test('only an owner is offered the Admin role', async () => {
+  test('an admin is offered the Member, Viewer and Admin roles', async () => {
     stubApi({ role: 'admin' })
     renderTeamPage()
     await screen.findByRole('heading', { name: 'Design crew' })
 
     await userEvent.click(screen.getByRole('button', { name: 'Invite' }))
     expect(screen.getByRole('option', { name: /Member/ })).toBeInTheDocument()
-    expect(screen.queryByRole('option', { name: /Admin/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /Viewer/ })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /Admin/ })).toBeInTheDocument()
   })
 })

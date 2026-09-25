@@ -15,16 +15,10 @@ const me = {
   },
 }
 
-const team = (
-  id: string,
-  name: string,
-  role = 'owner',
-  accessLevel = 'read',
-): Record<string, string> => ({
+const team = (id: string, name: string, role = 'superadmin'): Record<string, string> => ({
   id,
   name,
   role,
-  accessLevel,
   createdAt: '2026-06-01T00:00:00.000Z',
   updatedAt: '2026-06-20T00:00:00.000Z',
 })
@@ -44,16 +38,8 @@ const stubApi = (initialTeams: Record<string, string>[]) => {
         return jsonResponse(me)
       }
       if (url.includes('/teams') && method === 'POST') {
-        const body = JSON.parse(String(init?.body ?? '{}')) as {
-          name: string
-          accessLevel?: string
-        }
-        const created = team(
-          `team-${teams.length + 1}`,
-          body.name,
-          'owner',
-          body.accessLevel ?? 'read',
-        )
+        const body = JSON.parse(String(init?.body ?? '{}')) as { name: string }
+        const created = team(`team-${teams.length + 1}`, body.name)
         teams.push(created)
         return jsonResponse({ team: created }, 201)
       }

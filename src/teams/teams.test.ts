@@ -3,17 +3,10 @@ import { randomUUID } from 'node:crypto'
 import { inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { isUniqueViolation } from '../db/errors.ts'
-import {
-  TEAM_ACCESS_LEVELS,
-  TEAM_ROLES,
-  type TeamAccessLevel,
-  teamMembersTable,
-  teamsTable,
-  usersTable,
-} from '../db/schema.ts'
+import { TEAM_ROLES, teamMembersTable, teamsTable, usersTable } from '../db/schema.ts'
 import { createTeam, getTeamForMember, listTeamsForUser } from './teams.ts'
 
-// Integration tests against the dockerized Postgres. A creator (who becomes a team's first owner) and a
+// Integration tests against the dockerized Postgres. A creator (who becomes a team's superadmin) and a
 // stranger (in no team) so the membership scoping is real — a stranger must never reach a team's row.
 const creatorEmail = `team-creator-${randomUUID()}@example.test`
 const strangerEmail = `team-stranger-${randomUUID()}@example.test`
@@ -27,14 +20,9 @@ const isolatedUserIds: string[] = []
 
 const makeTeam = async (input: {
   name: string
-  accessLevel?: TeamAccessLevel
   creatorId: string
-}): Promise<{ id: string; name: string; accessLevel: TeamAccessLevel }> => {
-  const team = await createTeam({
-    name: input.name,
-    accessLevel: input.accessLevel,
-    creatorId: input.creatorId,
-  })
+}): Promise<{ id: string; name: string }> => {
+  const team = await createTeam({ name: input.name, creatorId: input.creatorId })
   createdTeamIds.push(team.id)
   return team
 }
@@ -77,10 +65,9 @@ afterAll(async () => {
 })
 
 describe('teams data access', () => {
-  test('a created team seats the creator as its superadmin and defaults to read access', async () => {
+  test('a created team seats the creator as its superadmin', async () => {
     const team = await makeTeam({ name: 'Design crew', creatorId })
     expect(team.name).toBe('Design crew')
-    expect(team.accessLevel).toBe(TEAM_ACCESS_LEVELS.read)
 
     // The authorization that matters is the membership, not created_by_id.
     const membership = await getTeamForMember({ teamId: team.id, userId: creatorId })
@@ -104,15 +91,6 @@ describe('teams data access', () => {
       .values({ teamId: team.id, userId: strangerId, role: TEAM_ROLES.admin })
     const strangerMembership = await getTeamForMember({ teamId: team.id, userId: strangerId })
     expect(strangerMembership?.role).toBe(TEAM_ROLES.admin)
-  })
-
-  test('an explicit access level is stored as given', async () => {
-    const team = await makeTeam({
-      name: 'Editors',
-      accessLevel: TEAM_ACCESS_LEVELS.write,
-      creatorId,
-    })
-    expect(team.accessLevel).toBe(TEAM_ACCESS_LEVELS.write)
   })
 
   test('getTeamForMember returns null for a non-member — never a team they can’t see', async () => {

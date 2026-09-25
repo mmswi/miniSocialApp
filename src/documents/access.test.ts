@@ -3,19 +3,23 @@ import { randomUUID } from 'node:crypto'
 import { inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import {
-  TEAM_ACCESS_LEVELS,
   TEAM_ROLES,
-  type TeamAccessLevel,
+  type TeamRole,
   documentTeamsTable,
   teamMembersTable,
   teamsTable,
   usersTable,
 } from '../db/schema.ts'
-import { DOCUMENT_ACCESS_OWNER, getDocumentAccessForUser } from './access.ts'
+import {
+  DOCUMENT_ACCESS_LEVELS,
+  DOCUMENT_ACCESS_OWNER,
+  type DocumentAccessLevel,
+  getDocumentAccessForUser,
+} from './access.ts'
 import { createDocument } from './documents.ts'
 
 // Direct-to-Postgres tests of the effective-access resolver. We seed the whole graph by hand — users, a
-// document, teams at different levels, memberships, shares — because the resolver's job is to fold all of
+// document, teams, memberships at different roles, shares — because the resolver's job is to fold all of
 // that into a single answer, and only a real graph exercises the max-over-teams and owner-beats-teams paths.
 const emails: string[] = []
 const teamIds: string[] = []
@@ -30,10 +34,10 @@ const seedUser = async (prefix: string): Promise<string> => {
   return user.id
 }
 
-const seedTeam = async (accessLevel: TeamAccessLevel): Promise<string> => {
+const seedTeam = async (): Promise<string> => {
   const [team] = await db
     .insert(teamsTable)
-    .values({ name: `team-${randomUUID()}`, accessLevel })
+    .values({ name: `team-${randomUUID()}` })
     .returning({ id: teamsTable.id })
   if (team === undefined) {
     throw new Error('failed to seed team')
@@ -42,8 +46,8 @@ const seedTeam = async (accessLevel: TeamAccessLevel): Promise<string> => {
   return team.id
 }
 
-const seatMember = (teamId: string, userId: string): Promise<unknown> =>
-  db.insert(teamMembersTable).values({ teamId, userId, role: TEAM_ROLES.member })
+const seatMember = (teamId: string, userId: string, role: TeamRole): Promise<unknown> =>
+  db.insert(teamMembersTable).values({ teamId, userId, role })
 
 const shareInto = (documentId: string, teamId: string): Promise<unknown> =>
   db.insert(documentTeamsTable).values({ documentId, teamId })
@@ -66,54 +70,66 @@ describe('getDocumentAccessForUser', () => {
     expect(resolved?.document.id).toBe(doc.id)
   })
 
-  test("a member of a team the doc is shared into gets that team's level", async () => {
-    const ownerId = await seedUser('res-owner-shared')
-    const memberId = await seedUser('res-member')
-    const doc = await createDocument({ ownerId })
-    const teamId = await seedTeam(TEAM_ACCESS_LEVELS.write)
-    await seatMember(teamId, memberId)
-    await shareInto(doc.id, teamId)
+  const levelByRole: [TeamRole, DocumentAccessLevel][] = [
+    [TEAM_ROLES.viewer, DOCUMENT_ACCESS_LEVELS.read],
+    [TEAM_ROLES.member, DOCUMENT_ACCESS_LEVELS.write],
+    [TEAM_ROLES.admin, DOCUMENT_ACCESS_LEVELS.delete],
+    [TEAM_ROLES.superadmin, DOCUMENT_ACCESS_LEVELS.delete],
+  ]
+  for (const [role, expectedLevel] of levelByRole) {
+    test(`a ${role} of a team the doc is shared into gets ${expectedLevel}`, async () => {
+      const ownerId = await seedUser(`res-owner-${role}`)
+      const teammateId = await seedUser(`res-${role}`)
+      const doc = await createDocument({ ownerId })
+      const teamId = await seedTeam()
+      await seatMember(teamId, teammateId, role)
+      await shareInto(doc.id, teamId)
 
-    const resolved = await getDocumentAccessForUser({ documentId: doc.id, userId: memberId })
-    expect(resolved?.access).toBe(TEAM_ACCESS_LEVELS.write)
-  })
+      const resolved = await getDocumentAccessForUser({ documentId: doc.id, userId: teammateId })
+      expect(resolved?.access).toBe(expectedLevel)
+    })
+  }
 
-  test('shared into several of the user’s teams → the MAX level wins', async () => {
+  test('shared into several of the user’s teams → the highest level wins', async () => {
     const ownerId = await seedUser('res-owner-max')
     const userId = await seedUser('res-multi')
     const doc = await createDocument({ ownerId })
-    const readTeam = await seedTeam(TEAM_ACCESS_LEVELS.read)
-    const deleteTeam = await seedTeam(TEAM_ACCESS_LEVELS.delete)
-    const writeTeam = await seedTeam(TEAM_ACCESS_LEVELS.write)
-    for (const teamId of [readTeam, deleteTeam, writeTeam]) {
-      await seatMember(teamId, userId)
+    const viewerTeam = await seedTeam()
+    const adminTeam = await seedTeam()
+    const memberTeam = await seedTeam()
+    await seatMember(viewerTeam, userId, TEAM_ROLES.viewer)
+    await seatMember(adminTeam, userId, TEAM_ROLES.admin)
+    await seatMember(memberTeam, userId, TEAM_ROLES.member)
+    for (const teamId of [viewerTeam, adminTeam, memberTeam]) {
       await shareInto(doc.id, teamId)
     }
 
     const resolved = await getDocumentAccessForUser({ documentId: doc.id, userId })
-    expect(resolved?.access).toBe(TEAM_ACCESS_LEVELS.delete) // delete > write > read
+    expect(resolved?.access).toBe(DOCUMENT_ACCESS_LEVELS.delete) // admin (delete) > member > viewer
   })
 
-  test('a higher level from a team the user is NOT in does not count', async () => {
+  test('a higher role in a team the user is NOT in does not count', async () => {
     const ownerId = await seedUser('res-owner-foreign')
     const userId = await seedUser('res-partial')
+    const foreignAdminId = await seedUser('res-foreign-admin')
     const doc = await createDocument({ ownerId })
-    const usersReadTeam = await seedTeam(TEAM_ACCESS_LEVELS.read)
-    const foreignDeleteTeam = await seedTeam(TEAM_ACCESS_LEVELS.delete)
-    await seatMember(usersReadTeam, userId)
-    await shareInto(doc.id, usersReadTeam)
-    await shareInto(doc.id, foreignDeleteTeam) // shared, but the user is not a member of this team
+    const usersTeam = await seedTeam()
+    const foreignTeam = await seedTeam()
+    await seatMember(usersTeam, userId, TEAM_ROLES.viewer)
+    await seatMember(foreignTeam, foreignAdminId, TEAM_ROLES.admin)
+    await shareInto(doc.id, usersTeam)
+    await shareInto(doc.id, foreignTeam) // shared, but the user is not a member of this team
 
     const resolved = await getDocumentAccessForUser({ documentId: doc.id, userId })
-    expect(resolved?.access).toBe(TEAM_ACCESS_LEVELS.read) // NOT delete — the foreign team grants nothing
+    expect(resolved?.access).toBe(DOCUMENT_ACCESS_LEVELS.read) // NOT delete — the foreign team grants nothing
   })
 
-  test('the owner keeps full access even when also a lower-level team member', async () => {
+  test('the owner keeps full access even when also a viewer in a team the doc is shared into', async () => {
     const ownerId = await seedUser('res-owner-also-member')
     const doc = await createDocument({ ownerId })
-    const readTeam = await seedTeam(TEAM_ACCESS_LEVELS.read)
-    await seatMember(readTeam, ownerId)
-    await shareInto(doc.id, readTeam)
+    const teamId = await seedTeam()
+    await seatMember(teamId, ownerId, TEAM_ROLES.viewer)
+    await shareInto(doc.id, teamId)
 
     const resolved = await getDocumentAccessForUser({ documentId: doc.id, userId: ownerId })
     expect(resolved?.access).toBe(DOCUMENT_ACCESS_OWNER)
@@ -123,8 +139,8 @@ describe('getDocumentAccessForUser', () => {
     const ownerId = await seedUser('res-owner-outsider')
     const outsiderId = await seedUser('res-outsider')
     const doc = await createDocument({ ownerId })
-    const teamId = await seedTeam(TEAM_ACCESS_LEVELS.write)
-    await seatMember(teamId, outsiderId) // in a team, but the doc was never shared into it
+    const teamId = await seedTeam()
+    await seatMember(teamId, outsiderId, TEAM_ROLES.member) // in a team, but the doc was never shared into it
 
     expect(await getDocumentAccessForUser({ documentId: doc.id, userId: outsiderId })).toBeNull()
   })

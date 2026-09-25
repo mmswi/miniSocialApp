@@ -9,9 +9,8 @@ import { SESSION_COOKIE_NAME } from '../auth/cookies.ts'
 import { createSession } from '../auth/session.ts'
 import { db } from '../db/client.ts'
 import {
-  TEAM_ACCESS_LEVELS,
   TEAM_ROLES,
-  type TeamAccessLevel,
+  type TeamRole,
   documentTeamsTable,
   documentsTable,
   teamMembersTable,
@@ -55,25 +54,23 @@ const freshDocument = async (): Promise<string> => {
   return doc.id
 }
 
-// Share a document into a fresh team at `accessLevel` and seat a brand-new user in it. Returns that member's
-// session cookie — the M5 path by which someone OTHER than the owner may join the live room. Direct inserts
+// Share a document into a fresh team and seat a brand-new user in it at `role`. Returns their session
+// cookie — the path by which someone OTHER than the owner may join the live room. Direct inserts
 // (not the REST routes) keep this focused on the ws gate; the routes are covered by teams/routes.test.ts.
-const shareDocumentWithNewMember = async (
+const shareDocumentWithNewTeammate = async (
   documentId: string,
-  accessLevel: TeamAccessLevel,
+  role: TeamRole,
 ): Promise<string> => {
   const [team] = await db
     .insert(teamsTable)
-    .values({ name: `sync-team-${randomUUID()}`, accessLevel })
+    .values({ name: `sync-team-${randomUUID()}` })
     .returning()
   if (team === undefined) {
     throw new Error('failed to seed team')
   }
   createdTeamIds.push(team.id)
   const member = await seedUser('sync-member')
-  await db
-    .insert(teamMembersTable)
-    .values({ teamId: team.id, userId: member.id, role: TEAM_ROLES.member })
+  await db.insert(teamMembersTable).values({ teamId: team.id, userId: member.id, role })
   await db.insert(documentTeamsTable).values({ documentId, teamId: team.id })
   return member.cookie
 }
@@ -344,19 +341,19 @@ describe('hand-built ws sync', () => {
 
   test('a member of a team the document is shared into may join the room (M5)', async () => {
     const documentId = await freshDocument()
-    const memberCookie = await shareDocumentWithNewMember(documentId, TEAM_ACCESS_LEVELS.write)
+    const memberCookie = await shareDocumentWithNewTeammate(documentId, TEAM_ROLES.member)
     expect(await upgradeRefused(documentId, memberCookie)).toBe(false)
   })
 
-  test('a read-level member may also join — they receive content; M6 gates their writes', async () => {
+  test('a viewer may also join — they receive content; M6 gates their writes', async () => {
     const documentId = await freshDocument()
-    const memberCookie = await shareDocumentWithNewMember(documentId, TEAM_ACCESS_LEVELS.read)
-    expect(await upgradeRefused(documentId, memberCookie)).toBe(false)
+    const viewerCookie = await shareDocumentWithNewTeammate(documentId, TEAM_ROLES.viewer)
+    expect(await upgradeRefused(documentId, viewerCookie)).toBe(false)
   })
 
   test('the owner and a shared team member co-edit live, both directions (M5 payoff)', async () => {
     const documentId = await freshDocument()
-    const memberCookie = await shareDocumentWithNewMember(documentId, TEAM_ACCESS_LEVELS.write)
+    const memberCookie = await shareDocumentWithNewTeammate(documentId, TEAM_ROLES.member)
     const owner = await connect(documentId, ownerCookie)
     const member = await connect(documentId, memberCookie)
 
@@ -372,36 +369,36 @@ describe('hand-built ws sync', () => {
     await member.close()
   })
 
-  test('a read-level member cannot write over the ws — edits dropped, not broadcast or persisted (M6)', async () => {
+  test('a viewer cannot write over the ws — edits dropped, not broadcast or persisted (M6)', async () => {
     const documentId = await freshDocument()
-    const readerCookie = await shareDocumentWithNewMember(documentId, TEAM_ACCESS_LEVELS.read)
+    const viewerCookie = await shareDocumentWithNewTeammate(documentId, TEAM_ROLES.viewer)
     const owner = await connect(documentId, ownerCookie)
-    const reader = await connect(documentId, readerCookie)
+    const viewer = await connect(documentId, viewerCookie)
 
-    // A reader RECEIVES: the owner writes, and the read-level member sees it (SyncStep1 is allowed, so the
-    // reader gets content — only its own writes are blocked).
+    // A viewer RECEIVES: the owner writes, and the viewer sees it (SyncStep1 is allowed, so the
+    // viewer gets content — only its own writes are blocked).
     owner.type('owner content')
-    await waitFor(() => reader.text() === 'owner content')
-    expect(reader.text()).toBe('owner content')
-    // Confirm the owner's edit is durably persisted BEFORE we test the reader's write is not, so the final
+    await waitFor(() => viewer.text() === 'owner content')
+    expect(viewer.text()).toBe('owner content')
+    // Confirm the owner's edit is durably persisted BEFORE we test the viewer's write is not, so the final
     // assertion can't pass just because nothing has flushed yet.
     await waitFor(
       async () => (await loadDoc(documentId)).getText(SHARED_TEXT).toString() === 'owner content',
     )
 
-    // The reader tries to write. Its client applies the edit locally and sends it up; the server drops it.
-    reader.type(' reader edit')
-    await waitFor(() => reader.text() === 'owner content reader edit') // local-only + sent to the server
+    // The viewer tries to write. Its client applies the edit locally and sends it up; the server drops it.
+    viewer.type(' viewer edit')
+    await waitFor(() => viewer.text() === 'owner content viewer edit') // local-only + sent to the server
 
-    // Broadcast window: had the server (wrongly) accepted the reader's update, the owner would see it here.
+    // Broadcast window: had the server (wrongly) accepted the viewer's update, the owner would see it here.
     await new Promise((resolve) => setTimeout(resolve, 200))
-    expect(owner.text()).toBe('owner content') // the owner never received the reader's edit
+    expect(owner.text()).toBe('owner content') // the owner never received the viewer's edit
 
     // And it was never persisted — a fresh reload from Postgres holds only the owner's content.
     const persisted = await loadDoc(documentId)
     expect(persisted.getText(SHARED_TEXT).toString()).toBe('owner content')
 
     await owner.close()
-    await reader.close()
+    await viewer.close()
   })
 })

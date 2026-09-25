@@ -1,12 +1,6 @@
 import { and, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
-import {
-  TEAM_ACCESS_LEVELS,
-  TEAM_ROLES,
-  type TeamAccessLevel,
-  type TeamRole,
-  teamMembersTable,
-} from '../db/schema.ts'
+import { TEAM_ROLES, type TeamRole, teamMembersTable } from '../db/schema.ts'
 import { forbidden, notFound } from '../lib/errors.ts'
 
 // Team roles are ordered: superadmin ⊃ admin ⊃ member ⊃ viewer. A guard asks "at least this rank?", so
@@ -20,15 +14,6 @@ export const TEAM_ROLE_RANK: Record<TeamRole, number> = {
   [TEAM_ROLES.member]: 2,
   [TEAM_ROLES.admin]: 3,
   [TEAM_ROLES.superadmin]: 4,
-}
-
-// The access-level chain read ⊂ write ⊂ delete, ranked for the same reason and the same way as roles: rank
-// is a domain rule kept in TS, not the pg enum's declaration order. The effective-access resolver
-// (documents/access.ts) uses it to pick the MAX level over the teams a user reaches a document through.
-export const TEAM_ACCESS_LEVEL_RANK: Record<TeamAccessLevel, number> = {
-  [TEAM_ACCESS_LEVELS.read]: 1,
-  [TEAM_ACCESS_LEVELS.write]: 2,
-  [TEAM_ACCESS_LEVELS.delete]: 3,
 }
 
 // The caller's role in a team, or null when they aren't a member. null is the "you may not see this team"

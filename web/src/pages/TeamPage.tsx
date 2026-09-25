@@ -27,30 +27,20 @@ type PageStatus = 'loading' | 'ready' | 'notFound' | 'error'
 const formatLastEdited = (iso: string): string =>
   new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 
-// The role choices in the invite form depend on who is asking: only an owner may confer admin (the server
-// 403s otherwise), so an admin caller never even sees the option that would fail. (Moved from the dashboard
-// with the invite form — inviting is a team-page action now.)
-const inviteRoleOptions = (
-  callerRole: ClientTeamRole,
-): { value: ClientInvitableRole; label: string }[] => {
-  const memberOption = {
-    value: CLIENT_TEAM_ROLES.member,
-    label: 'Member — can view and use shared documents',
-  }
-  const adminOption = {
-    value: CLIENT_TEAM_ROLES.admin,
-    label: 'Admin — can also manage members and invites',
-  }
-  return callerRole === CLIENT_TEAM_ROLES.owner ? [memberOption, adminOption] : [memberOption]
-}
+const inviteRoleOptions: { value: ClientInvitableRole; label: string }[] = [
+  { value: CLIENT_TEAM_ROLES.member, label: 'Member — can view and edit documents' },
+  { value: CLIENT_TEAM_ROLES.viewer, label: 'Viewer — can only view documents' },
+  { value: CLIENT_TEAM_ROLES.admin, label: 'Admin — can also manage members and invites' },
+]
 
+// Narrow the <select>'s raw string back to an invitable role.
 const toInvitableRole = (value: string): ClientInvitableRole =>
-  value === CLIENT_TEAM_ROLES.admin ? CLIENT_TEAM_ROLES.admin : CLIENT_TEAM_ROLES.member
+  inviteRoleOptions.find((option) => option.value === value)?.value ?? CLIENT_TEAM_ROLES.member
 
 // Inviting is an admin-and-up action; a plain member never sees the control (role-gating by hiding) rather
 // than a button that would only 403.
 const canInviteToTeam = (role: ClientTeamRole): boolean =>
-  role === CLIENT_TEAM_ROLES.owner || role === CLIENT_TEAM_ROLES.admin
+  role === CLIENT_TEAM_ROLES.superadmin || role === CLIENT_TEAM_ROLES.admin
 
 export const TeamPage = () => {
   const { teamId } = useParams()
@@ -168,9 +158,7 @@ export const TeamPage = () => {
         <div className="space-y-6">
           <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <h1 className="text-xl font-semibold">{team.name}</h1>
-            <p className="mt-1 text-sm text-slate-500">
-              {role} · {team.accessLevel} access
-            </p>
+            <p className="mt-1 text-sm text-slate-500">{role}</p>
           </div>
 
           <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -231,7 +219,7 @@ export const TeamPage = () => {
                   value={inviteRole}
                   onChange={(event) => setInviteRole(toInvitableRole(event.target.value))}
                 >
-                  {inviteRoleOptions(role).map((option) => (
+                  {inviteRoleOptions.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>

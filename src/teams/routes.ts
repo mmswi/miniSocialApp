@@ -7,7 +7,7 @@ import {
   parseOrThrow,
   requireAuthHook,
 } from '../auth/route-helpers.ts'
-import { TEAM_ACCESS_LEVELS, TEAM_ROLES } from '../db/schema.ts'
+import { TEAM_ROLES } from '../db/schema.ts'
 import { getDocumentForOwner } from '../documents/documents.ts'
 import { conflict, forbidden, notFound } from '../lib/errors.ts'
 import {
@@ -34,23 +34,16 @@ import {
 
 const createTeamBody = z.object({
   name: z.string().trim().min(1).max(100),
-  // Optional — omitting it lets the column default ('read', the safest ceiling) apply. Each option is a
-  // named constant, not a bare 'read'/'write'/'delete', so the enum stays the single source of truth.
-  accessLevel: z
-    .enum([TEAM_ACCESS_LEVELS.read, TEAM_ACCESS_LEVELS.write, TEAM_ACCESS_LEVELS.delete])
-    .optional(),
 })
 
 const teamIdParams = z.object({
   teamId: z.string().uuid(),
 })
 
-// Only member and admin are invitable — never owner (a team gains an owner by promotion, never straight
-// from an invite). Named constants, not bare strings, so the enum stays the single source of truth — same
-// idiom as createTeamBody's accessLevel.
+// Every role except superadmin, which changes hands only by transfer.
 const createInviteBody = z.object({
   email: z.string().email(),
-  role: z.enum([TEAM_ROLES.admin, TEAM_ROLES.member]),
+  role: z.enum([TEAM_ROLES.admin, TEAM_ROLES.member, TEAM_ROLES.viewer]),
 })
 
 // The raw invite token, straight from the emailed link's query string. It's the capability, so it's opaque
@@ -90,15 +83,11 @@ export const teamRoutes = async (app: FastifyInstance): Promise<void> => {
     return { teams }
   })
 
-  // Create a team; the caller becomes its first owner (createTeam seats the membership atomically).
+  // Create a team; the caller becomes its superadmin (createTeam seats the membership atomically).
   app.post('/', async (req, reply) => {
     const { userId } = getAuthUser(req)
     const input = parseOrThrow(createTeamBody, req.body)
-    const team = await createTeam({
-      name: input.name,
-      accessLevel: input.accessLevel,
-      creatorId: userId,
-    })
+    const team = await createTeam({ name: input.name, creatorId: userId })
     return reply.code(201).send({ team })
   })
 
@@ -117,21 +106,12 @@ export const teamRoutes = async (app: FastifyInstance): Promise<void> => {
     return { team, role }
   })
 
-  // Invite an email to the team. Admin+ may invite at all; only the superadmin may confer 'admin' (an admin
-  // can't mint a peer who could then remove them). requireTeamRole gives the null→404 / under-rank→403 split
-  // for free AND hands back the caller's own role — exactly what the superadmin-for-admin rule needs, no
-  // second read.
+  // Invite an email to the team, as admin, member or viewer. Admin+ only.
   app.post('/:teamId/invites', async (req, reply) => {
     const { userId } = getAuthUser(req)
     const { teamId } = parseOrThrow(teamIdParams, req.params)
     const input = parseOrThrow(createInviteBody, req.body)
-    const callerRole = await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.admin })
-    if (input.role === TEAM_ROLES.admin && callerRole !== TEAM_ROLES.superadmin) {
-      throw forbidden(
-        'invite_admin_requires_superadmin',
-        'Only the superadmin can invite an admin.',
-      )
-    }
+    await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.admin })
     // Name for the email body. The guard already proved the team exists and the caller may act on it, so a
     // null here is only a delete-mid-request race — reported as the same 404 a non-member would get.
     const teamName = await getTeamNameById(teamId)
@@ -237,10 +217,9 @@ export const teamRoutes = async (app: FastifyInstance): Promise<void> => {
     return reply.code(201).send({ document })
   })
 
-  // Unshare a document from the team. Three independent ways to be allowed: you own the document, OR you're
-  // an admin+ of the team, OR you're a member and the team's level is `delete` (the level that grants
-  // members the right to unassign). A caller who is neither the owner nor a member gets 404 (no oracle); a
-  // member who clears none of the bars gets 403. A pair that wasn't shared is 404 once past the guard.
+  // Unshare a document from the team. Two ways to be allowed: you own the document, OR you're an admin+ of
+  // the team. A caller who is neither the owner nor a member gets 404 (no oracle); a member or viewer who is
+  // not the owner gets 403. A pair that wasn't shared is 404 once past the guard.
   app.delete('/:teamId/documents/:documentId', async (req, reply) => {
     const { userId } = getAuthUser(req)
     const { teamId, documentId } = parseOrThrow(teamDocumentParams, req.params)
@@ -251,9 +230,7 @@ export const teamRoutes = async (app: FastifyInstance): Promise<void> => {
     }
     const isTeamAdminPlus =
       membership !== null && TEAM_ROLE_RANK[membership.role] >= TEAM_ROLE_RANK[TEAM_ROLES.admin]
-    const isDeleteLevelMember =
-      membership !== null && membership.accessLevel === TEAM_ACCESS_LEVELS.delete
-    const mayUnassign = ownsDocument || isTeamAdminPlus || isDeleteLevelMember
+    const mayUnassign = ownsDocument || isTeamAdminPlus
     if (!mayUnassign) {
       throw forbidden('insufficient_team_role', 'You do not have permission to do that.')
     }

@@ -249,24 +249,16 @@ export const documentUpdatesTable = pgTable(
 )
 
 /*
- * Teams — permission groups that share documents (step 4)
+ * Teams (step 4)
  *
  *   users ──1──<── team_members >──many──1── teams   (a user is in many teams; a team has many members)
  *
- * A team is a named group with ONE access level (read | write | delete) — the ceiling on what its
- * members may do to a document shared into it. Sharing documents into teams is a later milestone; this
- * slice just creates teams and their memberships. A member also carries a ROLE (owner | admin | member)
- * that governs the TEAM itself — who may invite, rename, or delete it — orthogonal to the access level.
- *
- * Ownership lives ONLY in the memberships: a team is "owned" by whoever holds an `owner`-role row, not
- * by `teams.created_by_id`. That column is a historical footnote (set null when the creator is deleted),
- * so a team outlives its creator as long as some owner-role member remains.
+ * A member's role decides what they may do in the team: superadmin > admin > member > viewer.
+ * Each team has exactly one superadmin.
  */
 
-// A member's role in a team — everything they may do there comes from it: a viewer reads, a member also
-// edits, an admin also manages members, and the one superadmin also deletes the team and hands the role
-// over. Named once here so the pgEnum, the column, and the rank map in teams/authz.ts all derive from
-// these; a typo'd 'admn' anywhere is then a compile error, not a silent mis-grant.
+// viewer reads, member also edits, admin also manages members, superadmin also deletes the team and
+// transfers the role.
 export const TEAM_ROLES = {
   superadmin: 'superadmin',
   admin: 'admin',
@@ -282,25 +274,10 @@ export const teamRoleEnum = pgEnum('team_role', [
   TEAM_ROLES.viewer,
 ])
 
-// The team's ceiling on what its members may do to a shared document: read ⊂ write ⊂ delete, an ordered
-// superset chain. Not enforced by anything in this slice (it only bites when documents are shared into
-// teams, a later milestone); stored now so every team is created with its level from day one.
-export const TEAM_ACCESS_LEVELS = { read: 'read', write: 'write', delete: 'delete' } as const
-export type TeamAccessLevel = (typeof TEAM_ACCESS_LEVELS)[keyof typeof TEAM_ACCESS_LEVELS]
-
-export const teamAccessLevelEnum = pgEnum('team_access_level', [
-  TEAM_ACCESS_LEVELS.read,
-  TEAM_ACCESS_LEVELS.write,
-  TEAM_ACCESS_LEVELS.delete,
-])
-
 export const teamsTable = pgTable('teams', {
   id: uuid('id').defaultRandom().primaryKey(),
   name: text('name').notNull(),
-  accessLevel: teamAccessLevelEnum('access_level').notNull().default(TEAM_ACCESS_LEVELS.read),
-  // Who created the team — a footnote, NOT the authorization (that is an `owner`-role membership row).
-  // set null, where every other user FK in this file cascades: deleting the creator must not delete a
-  // team other people are still in, so the team survives with created_by_id nulled.
+  // Not used for authorization — that is the superadmin membership. set null so the team outlives its creator.
   createdById: uuid('created_by_id').references(() => usersTable.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -323,10 +300,7 @@ export const teamMembersTable = pgTable(
     // One membership per (team, user): a user can't be in a team twice. The DB is the race-safe arbiter
     // (a duplicate insert is a 23505 the data layer catches — not a check-then-insert two requests race).
     uniqueIndex('team_members_team_user_unique').on(t.teamId, t.userId),
-    // At most one superadmin per team: the WHERE makes the index cover only superadmin rows, so a second
-    // superadmin in the same team is a 23505, whatever code path tries it. "At least one" is createTeam's
-    // job (team + superadmin in one transaction). sql.raw because drizzle-kit writes a bound parameter into
-    // the migration as a literal `$1` instead of the value.
+    // At most one superadmin per team. sql.raw: drizzle-kit writes a bound parameter as a literal `$1`.
     uniqueIndex('team_members_one_superadmin')
       .on(t.teamId)
       .where(sql`${t.role} = ${sql.raw(`'${TEAM_ROLES.superadmin}'`)}`),

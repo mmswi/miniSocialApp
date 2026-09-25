@@ -49,10 +49,7 @@ const authCookie = (token: string): { cookie: string } => ({
   cookie: `${SESSION_COOKIE_NAME}=${token}`,
 })
 
-const createTeamAs = async (
-  actor: Actor,
-  body: { name: string; accessLevel?: string },
-): Promise<string> => {
+const createTeamAs = async (actor: Actor, body: { name: string }): Promise<string> => {
   const response = await app.inject({
     method: 'POST',
     url: '/teams',
@@ -324,11 +321,10 @@ describe('team invites', () => {
     expect(remaining.length).toBe(0)
   })
 
-  test('only the superadmin may invite an admin; an admin may invite a member but not a peer admin', async () => {
+  test('an admin may invite an admin, a member and a viewer', async () => {
     const superadmin = await signInNewUser('inv-role-superadmin')
     const teamId = await createTeamAs(superadmin, { name: 'Ranks' })
 
-    // Superadmin promotes someone to admin via an admin invite → allowed.
     const adminToBe = await signInNewUser('inv-role-admin')
     const asAdmin = await inviteAs(superadmin, teamId, adminToBe.email, 'admin')
     expect(asAdmin.response.statusCode).toBe(201)
@@ -337,16 +333,28 @@ describe('team invites', () => {
     }
     expect((await acceptAs(adminToBe, asAdmin.rawToken)).statusCode).toBe(200)
 
-    // That admin may invite a plain member...
-    const memberOk = await inviteAs(adminToBe, teamId, uniqueEmail('inv-role-member'), 'member')
-    expect(memberOk.response.statusCode).toBe(201)
+    for (const role of ['admin', 'member', 'viewer']) {
+      const invite = await inviteAs(adminToBe, teamId, uniqueEmail(`inv-role-${role}`), role)
+      expect(invite.response.statusCode).toBe(201)
+    }
+  })
 
-    // ...but may NOT confer admin — only the superadmin can.
-    const adminByAdmin = await inviteAs(adminToBe, teamId, uniqueEmail('inv-role-peer'), 'admin')
-    expect(adminByAdmin.response.statusCode).toBe(403)
-    expect(adminByAdmin.response.json<{ error: string }>().error).toBe(
-      'invite_admin_requires_superadmin',
-    )
+  test('an invite as viewer seats the invitee as a viewer', async () => {
+    const superadmin = await signInNewUser('inv-viewer-superadmin')
+    const teamId = await createTeamAs(superadmin, { name: 'Readers' })
+    const invitee = await signInNewUser('inv-viewer-target')
+    const { rawToken } = await inviteAs(superadmin, teamId, invitee.email, 'viewer')
+    if (rawToken === undefined) {
+      throw new Error('expected a viewer invite token')
+    }
+    expect((await acceptAs(invitee, rawToken)).statusCode).toBe(200)
+
+    const asViewer = await app.inject({
+      method: 'GET',
+      url: `/teams/${teamId}`,
+      headers: authCookie(invitee.token),
+    })
+    expect(asViewer.json<{ role: string }>().role).toBe('viewer')
   })
 
   test('a plain member can neither invite nor list invites', async () => {

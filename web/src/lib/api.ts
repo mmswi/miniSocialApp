@@ -176,18 +176,25 @@ export type DocumentMeta = {
 
 export const API_listDocuments = (): Promise<{ documents: DocumentMeta[] }> => request('/documents')
 
-// The caller's effective access to a document, as GET /documents/:id reports it: 'owner' (full), or the
-// team access level they reach it through. Mirrors the server's DocumentAccess. 'owner' isn't a team level,
-// so it gets its own named constant rather than folding into the team-level mirror.
+// Mirror of the server's DOCUMENT_ACCESS_LEVELS (documents/access.ts), kept separate from server code.
+export const CLIENT_DOCUMENT_ACCESS_LEVELS = {
+  read: 'read',
+  write: 'write',
+  delete: 'delete',
+} as const
+export type ClientDocumentAccessLevel =
+  (typeof CLIENT_DOCUMENT_ACCESS_LEVELS)[keyof typeof CLIENT_DOCUMENT_ACCESS_LEVELS]
+
+// The caller's access to a document, as GET /documents/:id reports it. Mirrors the server's DocumentAccess.
 export const CLIENT_DOCUMENT_ACCESS_OWNER = 'owner'
-export type ClientDocumentAccess = typeof CLIENT_DOCUMENT_ACCESS_OWNER | ClientTeamAccessLevel
+export type ClientDocumentAccess = typeof CLIENT_DOCUMENT_ACCESS_OWNER | ClientDocumentAccessLevel
 
 // Whether an access permits editing — owner or write/delete; read is view-only. Mirrors the server's
 // canWriteDocument, so the editor goes read-only in exactly the cases the server would drop the write.
 export const canEditWithAccess = (access: ClientDocumentAccess): boolean =>
   access === CLIENT_DOCUMENT_ACCESS_OWNER ||
-  access === CLIENT_TEAM_ACCESS_LEVELS.write ||
-  access === CLIENT_TEAM_ACCESS_LEVELS.delete
+  access === CLIENT_DOCUMENT_ACCESS_LEVELS.write ||
+  access === CLIENT_DOCUMENT_ACCESS_LEVELS.delete
 
 // One document's metadata plus the caller's own access to it (for the editor header + read-only gating). A
 // 404 (unreachable / unknown) surfaces as an ApiError with status 404 — the editor page shows a not-found
@@ -214,12 +221,10 @@ export const API_renameDocument = (
 export const API_deleteDocument = (id: string): Promise<null> =>
   request(`/documents/${id}`, { method: 'DELETE' })
 
-// A team a document is shared into, as the Share panel's checkbox rows read it — the team plus its access
-// level ("Design · write access"). Mirrors the server's DocumentTeamListItem.
+// Mirrors the server's DocumentTeamListItem.
 export type DocumentTeamShare = {
   id: string
   name: string
-  accessLevel: ClientTeamAccessLevel
 }
 
 // The teams a document is shared into. Owner-only (a non-owner gets 403 → ApiError); the dashboard lists
@@ -241,16 +246,13 @@ export const API_unassignDocumentFromTeam = (teamId: string, documentId: string)
 
 // --- teams ---
 
-// The team's access level (its ceiling over shared documents) and a member's role. The frontend's OWN
-// copy of the backend's team_access_level / team_role enums — importing the server's from db/schema.ts
-// would drag drizzle-orm into the client bundle. The CLIENT_ prefix marks these as independent mirrors
-// of one wire contract (not a shared source), and naming each value once keeps call sites off bare
-// 'read'/'owner' strings a typo could break.
-export const CLIENT_TEAM_ACCESS_LEVELS = { read: 'read', write: 'write', delete: 'delete' } as const
-export type ClientTeamAccessLevel =
-  (typeof CLIENT_TEAM_ACCESS_LEVELS)[keyof typeof CLIENT_TEAM_ACCESS_LEVELS]
-
-export const CLIENT_TEAM_ROLES = { owner: 'owner', admin: 'admin', member: 'member' } as const
+// Mirror of the server's TEAM_ROLES (db/schema.ts), kept separate so drizzle-orm stays out of the bundle.
+export const CLIENT_TEAM_ROLES = {
+  superadmin: 'superadmin',
+  admin: 'admin',
+  member: 'member',
+  viewer: 'viewer',
+} as const
 export type ClientTeamRole = (typeof CLIENT_TEAM_ROLES)[keyof typeof CLIENT_TEAM_ROLES]
 
 // A team as the client holds it — the server's TeamSummary wire shape (no created_by_id). Dates arrive
@@ -259,7 +261,6 @@ export type ClientTeamRole = (typeof CLIENT_TEAM_ROLES)[keyof typeof CLIENT_TEAM
 export type TeamMeta = {
   id: string
   name: string
-  accessLevel: ClientTeamAccessLevel
   createdAt: string
   updatedAt: string
 }
@@ -269,12 +270,8 @@ export type TeamListItem = TeamMeta & { role: ClientTeamRole }
 
 export const API_listTeams = (): Promise<{ teams: TeamListItem[] }> => request('/teams')
 
-// No access level sends just the name, so the server applies its default ('read', the safest ceiling).
-// The caller becomes the new team's owner server-side, so the response is a plain TeamMeta (no role).
-export const API_createTeam = (input: {
-  name: string
-  accessLevel?: ClientTeamAccessLevel
-}): Promise<{ team: TeamMeta }> =>
+// The caller becomes the team's superadmin.
+export const API_createTeam = (input: { name: string }): Promise<{ team: TeamMeta }> =>
   request('/teams', { method: 'POST', body: JSON.stringify(input) })
 
 // One team the caller is a member of, plus their own role in it — what the team page's header shows. A
@@ -307,9 +304,11 @@ export const API_listTeamMembers = (teamId: string): Promise<{ members: TeamMemb
 
 // --- team invites ---
 
-// Only member and admin can arrive by invite — never owner, a team gains an owner by promotion (mirror
-// of the server's createInviteBody enum).
-export type ClientInvitableRole = typeof CLIENT_TEAM_ROLES.admin | typeof CLIENT_TEAM_ROLES.member
+// Mirror of the server's createInviteBody roles.
+export type ClientInvitableRole =
+  | typeof CLIENT_TEAM_ROLES.admin
+  | typeof CLIENT_TEAM_ROLES.member
+  | typeof CLIENT_TEAM_ROLES.viewer
 
 // What the server returns for a freshly issued invite. The raw token is never in it — it lives only in
 // the recipient's email — so the UI can confirm "sent to X" but can never leak a joinable link.

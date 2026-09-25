@@ -254,12 +254,7 @@ export const DashboardPage = () => {
                                             void onToggleShare(document.id, team.id, isShared)
                                           }
                                         />
-                                        <span>
-                                          {team.name}{' '}
-                                          <span className="text-xs text-slate-400">
-                                            · {team.accessLevel} access
-                                          </span>
-                                        </span>
+                                        <span>{team.name}</span>
                                       </label>
                                     </li>
                                   )

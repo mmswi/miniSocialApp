@@ -1,36 +1,13 @@
 import { type ReactNode, type SyntheticEvent, useCallback, useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import {
-  API_createTeam,
-  API_listTeams,
-  ApiError,
-  CLIENT_TEAM_ACCESS_LEVELS,
-  type ClientTeamAccessLevel,
-  type TeamListItem,
-} from '../lib/api'
+import { API_createTeam, API_listTeams, ApiError, type TeamListItem } from '../lib/api'
 import { Button } from './Button'
-import { SelectField } from './SelectField'
 import { TextField } from './TextField'
 
 //   'loading'  the teams fetch is in flight
 //   'ready'    the list loaded (possibly empty)
 //   'error'    the fetch failed — offer a retry rather than a blank sidebar
 type ListStatus = 'loading' | 'ready' | 'error'
-
-// The access-level choices in the New-team form, each with a plain-language line for what it grants over
-// documents shared into the team. Referencing the named constants (never a bare 'read') keeps the client
-// mirror the single source of truth. (Moved here from the dashboard with the create-team form.)
-const teamAccessLevelOptions: { value: ClientTeamAccessLevel; label: string }[] = [
-  { value: CLIENT_TEAM_ACCESS_LEVELS.read, label: 'Read — members can view shared documents' },
-  { value: CLIENT_TEAM_ACCESS_LEVELS.write, label: 'Write — view and edit' },
-  { value: CLIENT_TEAM_ACCESS_LEVELS.delete, label: 'Delete — view, edit, and remove' },
-]
-
-// Narrow the <select>'s raw string back to the enum at the boundary. A value the options never emit falls
-// back to the safest ceiling instead of decaying to a bare string.
-const toTeamAccessLevel = (value: string): ClientTeamAccessLevel =>
-  teamAccessLevelOptions.find((option) => option.value === value)?.value ??
-  CLIENT_TEAM_ACCESS_LEVELS.read
 
 const navLinkClass = (isActive: boolean): string =>
   `block truncate rounded-md px-3 py-2 text-sm ${
@@ -49,9 +26,6 @@ export const AppShell = ({ children }: Props) => {
   const [teamsStatus, setTeamsStatus] = useState<ListStatus>('loading')
   const [isTeamFormOpen, setIsTeamFormOpen] = useState(false)
   const [teamName, setTeamName] = useState('')
-  const [teamAccessLevel, setTeamAccessLevel] = useState<ClientTeamAccessLevel>(
-    CLIENT_TEAM_ACCESS_LEVELS.read,
-  )
   const [isCreatingTeam, setIsCreatingTeam] = useState(false)
   const [teamError, setTeamError] = useState<string | null>(null)
 
@@ -70,11 +44,10 @@ export const AppShell = ({ children }: Props) => {
     void loadTeams()
   }, [loadTeams])
 
-  // Collapsing the form is also its reset — name, level, and any error all clear, so reopening starts clean.
+  // Collapsing the form is also its reset, so reopening starts clean.
   const closeTeamForm = () => {
     setIsTeamFormOpen(false)
     setTeamName('')
-    setTeamAccessLevel(CLIENT_TEAM_ACCESS_LEVELS.read)
     setTeamError(null)
   }
 
@@ -87,7 +60,7 @@ export const AppShell = ({ children }: Props) => {
     setTeamError(null)
     setIsCreatingTeam(true)
     try {
-      const { team } = await API_createTeam({ name: trimmedName, accessLevel: teamAccessLevel })
+      const { team } = await API_createTeam({ name: trimmedName })
       closeTeamForm()
       await loadTeams()
       // Straight to the new (empty) team's page — that's where you add documents and invite people.
@@ -134,17 +107,6 @@ export const AppShell = ({ children }: Props) => {
                 value={teamName}
                 onChange={(event) => setTeamName(event.target.value)}
               />
-              <SelectField
-                label="Access level"
-                value={teamAccessLevel}
-                onChange={(event) => setTeamAccessLevel(toTeamAccessLevel(event.target.value))}
-              >
-                {teamAccessLevelOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </SelectField>
               {teamError ? (
                 <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{teamError}</p>
               ) : null}

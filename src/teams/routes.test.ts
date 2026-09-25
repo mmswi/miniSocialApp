@@ -46,8 +46,8 @@ const authCookie = (token: string): { cookie: string } => ({
 // Create a team over HTTP and record its id for cleanup; returns the created team payload.
 const createTeamAs = async (
   token: string,
-  body: { name: string; accessLevel?: string },
-): Promise<{ id: string; name: string; accessLevel: string }> => {
+  body: { name: string },
+): Promise<{ id: string; name: string }> => {
   const response = await app.inject({
     method: 'POST',
     url: '/teams',
@@ -55,13 +55,13 @@ const createTeamAs = async (
     payload: body,
   })
   expect(response.statusCode).toBe(201)
-  const { team } = response.json<{ team: { id: string; name: string; accessLevel: string } }>()
+  const { team } = response.json<{ team: { id: string; name: string } }>()
   createdTeamIds.push(team.id)
   return team
 }
 
 // Like signInNewUser, but also resolves the new user's id — needed when a test seats them in a team
-// directly (a role/level combo the assignment matrix needs but the create-team flow can't produce).
+// directly (a role the create-team flow can't produce).
 const signInNewUserWithId = async (prefix: string): Promise<{ token: string; userId: string }> => {
   const email = uniqueEmail(prefix)
   await app.inject({ method: 'POST', url: '/auth/signup', payload: { email, password } })
@@ -90,7 +90,7 @@ const signInNewUserWithId = async (prefix: string): Promise<{ token: string; use
 const addTeamMember = async (
   teamId: string,
   userId: string,
-  role: 'member' | 'admin',
+  role: 'viewer' | 'member' | 'admin',
 ): Promise<void> => {
   await db.insert(teamMembersTable).values({ teamId, userId, role })
 }
@@ -167,12 +167,6 @@ describe('/teams', () => {
     expect(body.role).toBe('superadmin')
   })
 
-  test('a team with no access level defaults to read', async () => {
-    const token = await signInNewUser('team-default')
-    const created = await createTeamAs(token, { name: 'Readers' })
-    expect(created.accessLevel).toBe('read')
-  })
-
   test('a blank name is a 400', async () => {
     const token = await signInNewUser('team-blank')
     const response = await app.inject({
@@ -180,17 +174,6 @@ describe('/teams', () => {
       url: '/teams',
       headers: authCookie(token),
       payload: { name: '   ' },
-    })
-    expect(response.statusCode).toBe(400)
-  })
-
-  test('an unknown access level is a 400', async () => {
-    const token = await signInNewUser('team-badlevel')
-    const response = await app.inject({
-      method: 'POST',
-      url: '/teams',
-      headers: authCookie(token),
-      payload: { name: 'Bad', accessLevel: 'admin' },
     })
     expect(response.statusCode).toBe(400)
   })
@@ -277,7 +260,7 @@ describe('/teams/:teamId/documents — sharing', () => {
 
   test('an owner shares their document, and the team lists it', async () => {
     const token = await signInNewUser('share-owner')
-    const team = await createTeamAs(token, { name: 'Sharers', accessLevel: 'write' })
+    const team = await createTeamAs(token, { name: 'Sharers' })
     const document = await createDocumentAs(token, 'Q3 Launch Plan')
 
     const assigned = await assignDocument(token, team.id, document.id)
@@ -382,9 +365,9 @@ describe('/teams/:teamId/documents — sharing', () => {
     expect(unassigned.statusCode).toBe(204)
   })
 
-  test('a plain member cannot unshare when the team level is write — 403', async () => {
+  test('a member who does not own the document cannot unshare it — 403', async () => {
     const ownerToken = await signInNewUser('unshare-writeowner')
-    const team = await createTeamAs(ownerToken, { name: 'Write team', accessLevel: 'write' })
+    const team = await createTeamAs(ownerToken, { name: 'Members team' })
     const document = await createDocumentAs(ownerToken)
     expect((await assignDocument(ownerToken, team.id, document.id)).statusCode).toBe(201)
 
@@ -397,23 +380,6 @@ describe('/teams/:teamId/documents — sharing', () => {
       headers: authCookie(member.token),
     })
     expect(unassigned.statusCode).toBe(403)
-  })
-
-  test('a plain member CAN unshare when the team level is delete', async () => {
-    const ownerToken = await signInNewUser('unshare-deleteowner')
-    const team = await createTeamAs(ownerToken, { name: 'Delete team', accessLevel: 'delete' })
-    const document = await createDocumentAs(ownerToken)
-    expect((await assignDocument(ownerToken, team.id, document.id)).statusCode).toBe(201)
-
-    const member = await signInNewUserWithId('unshare-deletemember')
-    await addTeamMember(team.id, member.userId, 'member')
-
-    const unassigned = await app.inject({
-      method: 'DELETE',
-      url: `/teams/${team.id}/documents/${document.id}`,
-      headers: authCookie(member.token),
-    })
-    expect(unassigned.statusCode).toBe(204)
   })
 
   test('unsharing a pair that was never shared is a 404', async () => {
@@ -434,37 +400,37 @@ describe('/teams/:teamId/documents — sharing', () => {
 // The /documents routes now resolve access through team membership (M5-3). These live here because the setup
 // is team-heavy — a doc shared into a team the member belongs to — and this file already has the harness.
 describe('/documents/:id — access through team membership', () => {
-  // Owner shares a fresh document into a fresh team at `level`, then seats a fresh plain member in that team.
-  const shareDocWithMember = async (
-    level: 'read' | 'write' | 'delete',
+  // Owner shares a fresh document into a fresh team, then seats a fresh user in that team at `role`.
+  const shareDocWithTeammate = async (
+    role: 'viewer' | 'member' | 'admin',
   ): Promise<{
     ownerToken: string
-    memberToken: string
+    teammateToken: string
     documentId: string
     teamId: string
   }> => {
-    const ownerToken = await signInNewUser(`docacc-owner-${level}`)
-    const team = await createTeamAs(ownerToken, { name: `Team ${level}`, accessLevel: level })
+    const ownerToken = await signInNewUser(`docacc-owner-${role}`)
+    const team = await createTeamAs(ownerToken, { name: `Team ${role}` })
     const document = await createDocumentAs(ownerToken, 'Shared doc')
     expect((await assignDocument(ownerToken, team.id, document.id)).statusCode).toBe(201)
-    const member = await signInNewUserWithId(`docacc-member-${level}`)
-    await addTeamMember(team.id, member.userId, 'member')
-    return { ownerToken, memberToken: member.token, documentId: document.id, teamId: team.id }
+    const teammate = await signInNewUserWithId(`docacc-${role}`)
+    await addTeamMember(team.id, teammate.userId, role)
+    return { ownerToken, teammateToken: teammate.token, documentId: document.id, teamId: team.id }
   }
 
   test('a team member can read a shared document and sees their access level', async () => {
-    const { memberToken, documentId } = await shareDocWithMember('write')
+    const { teammateToken, documentId } = await shareDocWithTeammate('member')
     const response = await app.inject({
       method: 'GET',
       url: `/documents/${documentId}`,
-      headers: authCookie(memberToken),
+      headers: authCookie(teammateToken),
     })
     expect(response.statusCode).toBe(200)
     expect(response.json<{ access: string }>().access).toBe('write')
   })
 
   test('the owner’s own access reads as "owner"', async () => {
-    const { ownerToken, documentId } = await shareDocWithMember('write')
+    const { ownerToken, documentId } = await shareDocWithTeammate('member')
     const response = await app.inject({
       method: 'GET',
       url: `/documents/${documentId}`,
@@ -473,12 +439,12 @@ describe('/documents/:id — access through team membership', () => {
     expect(response.json<{ access: string }>().access).toBe('owner')
   })
 
-  test('a write-level member can rename the document', async () => {
-    const { memberToken, documentId } = await shareDocWithMember('write')
+  test('a member can rename the document', async () => {
+    const { teammateToken, documentId } = await shareDocWithTeammate('member')
     const response = await app.inject({
       method: 'PATCH',
       url: `/documents/${documentId}`,
-      headers: authCookie(memberToken),
+      headers: authCookie(teammateToken),
       payload: { title: 'Renamed by member' },
     })
     expect(response.statusCode).toBe(200)
@@ -487,29 +453,29 @@ describe('/documents/:id — access through team membership', () => {
     )
   })
 
-  test('a read-level member cannot rename — 403, not 404 (they can see the doc)', async () => {
-    const { memberToken, documentId } = await shareDocWithMember('read')
+  test('a viewer cannot rename — 403, not 404 (they can see the doc)', async () => {
+    const { teammateToken, documentId } = await shareDocWithTeammate('viewer')
     const response = await app.inject({
       method: 'PATCH',
       url: `/documents/${documentId}`,
-      headers: authCookie(memberToken),
+      headers: authCookie(teammateToken),
       payload: { title: 'nope' },
     })
     expect(response.statusCode).toBe(403)
   })
 
-  test('even a delete-level member cannot delete the document — hard delete stays owner-only (403)', async () => {
-    const { memberToken, documentId } = await shareDocWithMember('delete')
+  test('even a team admin cannot delete the document — hard delete stays owner-only (403)', async () => {
+    const { teammateToken, documentId } = await shareDocWithTeammate('admin')
     const response = await app.inject({
       method: 'DELETE',
       url: `/documents/${documentId}`,
-      headers: authCookie(memberToken),
+      headers: authCookie(teammateToken),
     })
     expect(response.statusCode).toBe(403)
   })
 
   test('GET /documents/:id/teams — owner sees the share, member 403, stranger 404', async () => {
-    const { ownerToken, memberToken, documentId, teamId } = await shareDocWithMember('write')
+    const { ownerToken, teammateToken, documentId, teamId } = await shareDocWithTeammate('member')
 
     const ownerView = await app.inject({
       method: 'GET',
@@ -522,7 +488,7 @@ describe('/documents/:id — access through team membership', () => {
     const memberView = await app.inject({
       method: 'GET',
       url: `/documents/${documentId}/teams`,
-      headers: authCookie(memberToken),
+      headers: authCookie(teammateToken),
     })
     expect(memberView.statusCode).toBe(403)
 

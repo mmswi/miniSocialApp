@@ -16,7 +16,7 @@ let strangerId = ''
 const createdTeamIds: string[] = []
 
 const makeTeam = async (creatorId: string): Promise<string> => {
-  const team = await createTeam({ name: 'authz team', accessLevel: undefined, creatorId })
+  const team = await createTeam({ name: 'authz team', creatorId })
   createdTeamIds.push(team.id)
   return team.id
 }

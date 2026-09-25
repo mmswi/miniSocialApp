@@ -2,7 +2,6 @@ import { and, asc, desc, eq } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import {
   TEAM_ROLES,
-  type TeamAccessLevel,
   type TeamRole,
   type TeamRow,
   teamMembersTable,
@@ -15,7 +14,6 @@ import {
 export type TeamSummary = {
   id: string
   name: string
-  accessLevel: TeamAccessLevel
   createdAt: Date
   updatedAt: Date
 }
@@ -28,24 +26,21 @@ export type TeamWithRole = TeamSummary & { role: TeamRole }
 const toTeamSummary = (row: TeamRow): TeamSummary => ({
   id: row.id,
   name: row.name,
-  accessLevel: row.accessLevel,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 })
 
 // Create a team and, in the SAME transaction, seat the creator as its superadmin. The two inserts are
 // atomic on purpose: a team must never exist without its superadmin, or it would be un-manageable and
-// un-deletable (every team route authorizes off memberships, not created_by_id). Passing
-// accessLevel: undefined omits the column so the DB default ('read', the safest ceiling) applies.
+// un-deletable (every team route authorizes off memberships, not created_by_id).
 export const createTeam = async (input: {
   name: string
-  accessLevel: TeamAccessLevel | undefined
   creatorId: string
 }): Promise<TeamSummary> => {
   return db.transaction(async (tx) => {
     const [team] = await tx
       .insert(teamsTable)
-      .values({ name: input.name, accessLevel: input.accessLevel, createdById: input.creatorId })
+      .values({ name: input.name, createdById: input.creatorId })
       .returning()
     if (team === undefined) {
       throw new Error('team insert returned no row')
@@ -64,7 +59,6 @@ export const listTeamsForUser = async (userId: string): Promise<TeamWithRole[]> 
     .select({
       id: teamsTable.id,
       name: teamsTable.name,
-      accessLevel: teamsTable.accessLevel,
       createdAt: teamsTable.createdAt,
       updatedAt: teamsTable.updatedAt,
       role: teamMembersTable.role,
@@ -87,7 +81,6 @@ export const getTeamForMember = async (input: {
     .select({
       id: teamsTable.id,
       name: teamsTable.name,
-      accessLevel: teamsTable.accessLevel,
       createdAt: teamsTable.createdAt,
       updatedAt: teamsTable.updatedAt,
       role: teamMembersTable.role,
