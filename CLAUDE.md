@@ -35,8 +35,11 @@ Build task lists (checkbox as you ship) and the auth test plan live alongside it
 
 ## Conventions
 - **Before writing or refactoring any TypeScript/React code, invoke the `mihai-coding-standards`
-  skill** (global) and follow it. It is the authority for naming, imports, props, conditionals,
-  and structure in this repo. Do not hand-write TS/React from memory — load the skill first.
+  skill, then the `ponytail` skill** (both global) and follow them. `mihai-coding-standards` is the
+  authority for naming, imports, props, conditionals, and structure in this repo; `ponytail` keeps
+  the solution minimal (YAGNI, reuse what the codebase has, stdlib/platform before dependencies).
+  On a conflict `mihai-coding-standards` wins: ponytail shortens the solution, never the names. Do
+  not hand-write TS/React from memory — load both skills first.
 - Quick summary (the skill is canonical): **named exports** (no default), **intentful names**,
   **no `any`** (everything typed), no barrel files, arrow functions, tree-shakeable imports.
 - **Server singletons are correct, not a smell.** Shared infrastructure (DB pool, Redis, worker,
@@ -54,8 +57,19 @@ Build task lists (checkbox as you ship) and the auth test plan live alongside it
 - Auth flows are E2E-critical — don't trust unit tests alone. Follow the auth test plan above
   (4 E2E flows + 6 security cases).
 
+## Feature tracking (TODO files)
+Each big feature has its own tracking folder next to its plan in `~/.gstack/projects/miniSocialApp/`,
+with one file per milestone. Current: `teams-v2-tracking/` (plan:
+`mihaimarinescu-feature-teams-plan-v2-20260925.md`; start at its `README.md`).
+- Work the TODOs in order; tick each checkbox the moment it's done, not at the end.
+- **For every completed TODO, add a log entry in that file's `## Log`: what was done (files, commit)
+  and WHY it was done that way** (the decision, the alternative rejected). A fresh session must be
+  able to pick the work up cold from these files.
+- Keep the README's status table and the gbrain board (`notes/minisocialapp-teams-tasks`) in sync.
+
 ## Current status & build order
-Building **auth first (step 1)** — the thing the user wants to learn first.
+Current: **step 4 teams, plan v2** (see Feature tracking above). Steps 1 (auth) and 2 (editor) are done.
+The auth notes below are kept as the record of step 1's decisions.
 
 **Auth slice decisions (eng review D2/D3/D4):**
 - **Hand-roll** the auth core (sessions, linking) on vetted primitives: `argon2id` (hashing) +
@@ -74,7 +88,7 @@ checkpoint** · 6) notifications · 7) versioning + caching · 8) hardening · 9
 
 ## Skill routing
 When a request matches a gstack skill, invoke it. Key routes:
-- **Writing/refactoring/reviewing TS or React → invoke `mihai-coding-standards` first**
+- **Writing/refactoring/reviewing TS or React → invoke `mihai-coding-standards`, then `ponytail`**
 - Strategy/scope → /plan-ceo-review · Architecture → /plan-eng-review · Design → /plan-design-review
 - Bugs/errors → /investigate · QA → /qa · Code/diff review → /review · Ship/PR → /ship
 - Save progress → /context-save · Resume → /context-restore
