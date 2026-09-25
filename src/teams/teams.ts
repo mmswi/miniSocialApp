@@ -133,3 +133,26 @@ export const getTeamNameById = async (teamId: string): Promise<string | null> =>
     .limit(1)
   return row === undefined ? null : row.name
 }
+
+// Rename a team. Returns null when the team no longer exists, which the route answers as a 404.
+export const renameTeam = async (input: {
+  teamId: string
+  name: string
+}): Promise<TeamSummary | null> => {
+  const [row] = await db
+    .update(teamsTable)
+    .set({ name: input.name, updatedAt: new Date() })
+    .where(eq(teamsTable.id, input.teamId))
+    .returning()
+  return row === undefined ? null : toTeamSummary(row)
+}
+
+// Delete a team. Its members, invites and document shares go with it (cascade); the documents stay with
+// their owners. Returns whether a row was removed.
+export const deleteTeam = async (teamId: string): Promise<boolean> => {
+  const deletedTeamRows = await db
+    .delete(teamsTable)
+    .where(eq(teamsTable.id, teamId))
+    .returning({ id: teamsTable.id })
+  return deletedTeamRows.length > 0
+}

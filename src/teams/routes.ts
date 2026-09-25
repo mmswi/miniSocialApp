@@ -26,13 +26,16 @@ import {
 } from './invites.ts'
 import {
   createTeam,
+  deleteTeam,
   getTeamForMember,
   getTeamNameById,
   listTeamMembers,
   listTeamsForUser,
+  renameTeam,
 } from './teams.ts'
 
-const createTeamBody = z.object({
+// Create and rename both send just the team's name.
+const teamNameBody = z.object({
   name: z.string().trim().min(1).max(100),
 })
 
@@ -86,7 +89,7 @@ export const teamRoutes = async (app: FastifyInstance): Promise<void> => {
   // Create a team; the caller becomes its superadmin (createTeam seats the membership atomically).
   app.post('/', async (req, reply) => {
     const { userId } = getAuthUser(req)
-    const input = parseOrThrow(createTeamBody, req.body)
+    const input = parseOrThrow(teamNameBody, req.body)
     const team = await createTeam({ name: input.name, creatorId: userId })
     return reply.code(201).send({ team })
   })
@@ -104,6 +107,31 @@ export const teamRoutes = async (app: FastifyInstance): Promise<void> => {
     // TeamPage later shows). role is split out of the joined row so `team` is a clean TeamSummary.
     const { role, ...team } = membership
     return { team, role }
+  })
+
+  // Rename the team. Admin+.
+  app.patch('/:teamId', async (req) => {
+    const { userId } = getAuthUser(req)
+    const { teamId } = parseOrThrow(teamIdParams, req.params)
+    const input = parseOrThrow(teamNameBody, req.body)
+    await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.admin })
+    const team = await renameTeam({ teamId, name: input.name })
+    if (team === null) {
+      throw notFound('team_not_found', 'Team not found.')
+    }
+    return { team }
+  })
+
+  // Delete the team. Superadmin only.
+  app.delete('/:teamId', async (req, reply) => {
+    const { userId } = getAuthUser(req)
+    const { teamId } = parseOrThrow(teamIdParams, req.params)
+    await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.superadmin })
+    const wasDeleted = await deleteTeam(teamId)
+    if (!wasDeleted) {
+      throw notFound('team_not_found', 'Team not found.')
+    }
+    return reply.code(204).send()
   })
 
   // Invite an email to the team, as admin, member or viewer. Admin+ only.

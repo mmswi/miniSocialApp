@@ -265,6 +265,90 @@ describe('/teams', () => {
   })
 })
 
+describe('/teams/:teamId — rename and delete', () => {
+  const renameAs = (token: string, teamId: string, name: string) =>
+    app.inject({
+      method: 'PATCH',
+      url: `/teams/${teamId}`,
+      headers: authCookie(token),
+      payload: { name },
+    })
+
+  const deleteAs = (token: string, teamId: string) =>
+    app.inject({ method: 'DELETE', url: `/teams/${teamId}`, headers: authCookie(token) })
+
+  test('an admin renames the team', async () => {
+    const superadminToken = await signInNewUser('rename-superadmin')
+    const team = await createTeamAs(superadminToken, { name: 'Old name' })
+    const admin = await signInNewUserWithId('rename-admin')
+    await addTeamMember(team.id, admin.userId, 'admin')
+
+    const renamed = await renameAs(admin.token, team.id, 'New name')
+    expect(renamed.statusCode).toBe(200)
+    expect(renamed.json<{ team: { name: string } }>().team.name).toBe('New name')
+  })
+
+  test('a member or a viewer cannot rename — 403', async () => {
+    const superadminToken = await signInNewUser('rename-deny-superadmin')
+    const team = await createTeamAs(superadminToken, { name: 'Keep me' })
+    for (const role of ['member', 'viewer'] as const) {
+      const teammate = await signInNewUserWithId(`rename-deny-${role}`)
+      await addTeamMember(team.id, teammate.userId, role)
+      expect((await renameAs(teammate.token, team.id, 'Hijacked')).statusCode).toBe(403)
+    }
+  })
+
+  test('a blank name is a 400', async () => {
+    const superadminToken = await signInNewUser('rename-blank')
+    const team = await createTeamAs(superadminToken, { name: 'Named' })
+    expect((await renameAs(superadminToken, team.id, '   ')).statusCode).toBe(400)
+  })
+
+  test('the superadmin deletes the team; afterwards it is a 404', async () => {
+    const superadminToken = await signInNewUser('delete-superadmin')
+    const team = await createTeamAs(superadminToken, { name: 'Short-lived' })
+
+    expect((await deleteAs(superadminToken, team.id)).statusCode).toBe(204)
+    const teamAfterDelete = await app.inject({
+      method: 'GET',
+      url: `/teams/${team.id}`,
+      headers: authCookie(superadminToken),
+    })
+    expect(teamAfterDelete.statusCode).toBe(404)
+  })
+
+  test('an admin cannot delete the team — 403', async () => {
+    const superadminToken = await signInNewUser('delete-deny-superadmin')
+    const team = await createTeamAs(superadminToken, { name: 'Stays' })
+    const admin = await signInNewUserWithId('delete-deny-admin')
+    await addTeamMember(team.id, admin.userId, 'admin')
+    expect((await deleteAs(admin.token, team.id)).statusCode).toBe(403)
+  })
+
+  test('a non-member gets 404 for rename and delete', async () => {
+    const superadminToken = await signInNewUser('manage-secret-superadmin')
+    const team = await createTeamAs(superadminToken, { name: 'Secret' })
+    const strangerToken = await signInNewUser('manage-stranger')
+    expect((await renameAs(strangerToken, team.id, 'Mine now')).statusCode).toBe(404)
+    expect((await deleteAs(strangerToken, team.id)).statusCode).toBe(404)
+  })
+
+  test('deleting a team keeps the documents that were shared into it', async () => {
+    const superadminToken = await signInNewUser('delete-keeps-docs')
+    const team = await createTeamAs(superadminToken, { name: 'Temporary' })
+    const sharedDocument = await createDocumentAs(superadminToken, 'Outlives the team')
+    expect((await assignDocument(superadminToken, team.id, sharedDocument.id)).statusCode).toBe(201)
+
+    expect((await deleteAs(superadminToken, team.id)).statusCode).toBe(204)
+    const documentAfterDelete = await app.inject({
+      method: 'GET',
+      url: `/documents/${sharedDocument.id}`,
+      headers: authCookie(superadminToken),
+    })
+    expect(documentAfterDelete.statusCode).toBe(200)
+  })
+})
+
 describe('/teams/:teamId/documents — sharing', () => {
   test('rejects unauthenticated requests with 401', async () => {
     const teamId = randomUUID()
