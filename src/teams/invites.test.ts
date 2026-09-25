@@ -321,7 +321,7 @@ describe('team invites', () => {
     expect(remaining.length).toBe(0)
   })
 
-  test('an admin may invite an admin, a member and a viewer', async () => {
+  test('an admin invites members and viewers; only the superadmin invites an admin', async () => {
     const superadmin = await signInNewUser('inv-role-superadmin')
     const teamId = await createTeamAs(superadmin, { name: 'Ranks' })
 
@@ -333,10 +333,15 @@ describe('team invites', () => {
     }
     expect((await acceptAs(adminToBe, asAdmin.rawToken)).statusCode).toBe(200)
 
-    for (const role of ['admin', 'member', 'viewer']) {
+    for (const role of ['member', 'viewer']) {
       const invite = await inviteAs(adminToBe, teamId, uniqueEmail(`inv-role-${role}`), role)
       expect(invite.response.statusCode).toBe(201)
     }
+    const adminByAdmin = await inviteAs(adminToBe, teamId, uniqueEmail('inv-role-peer'), 'admin')
+    expect(adminByAdmin.response.statusCode).toBe(403)
+    expect(adminByAdmin.response.json<{ error: string }>().error).toBe(
+      'invite_admin_requires_superadmin',
+    )
   })
 
   test('an invite as viewer seats the invitee as a viewer', async () => {

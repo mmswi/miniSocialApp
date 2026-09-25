@@ -27,15 +27,34 @@ type PageStatus = 'loading' | 'ready' | 'notFound' | 'error'
 const formatLastEdited = (iso: string): string =>
   new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 
-const inviteRoleOptions: { value: ClientInvitableRole; label: string }[] = [
-  { value: CLIENT_TEAM_ROLES.member, label: 'Member — can view and edit documents' },
-  { value: CLIENT_TEAM_ROLES.viewer, label: 'Viewer — can only view documents' },
-  { value: CLIENT_TEAM_ROLES.admin, label: 'Admin — can also manage members and invites' },
-]
+const memberInviteOption = {
+  value: CLIENT_TEAM_ROLES.member,
+  label: 'Member — can view and edit documents',
+} as const
+const viewerInviteOption = {
+  value: CLIENT_TEAM_ROLES.viewer,
+  label: 'Viewer — can only view documents',
+} as const
+const adminInviteOption = {
+  value: CLIENT_TEAM_ROLES.admin,
+  label: 'Admin — can also manage members and invites',
+} as const
+
+// Only the superadmin invites admins (the server 403s otherwise).
+const inviteRoleOptionsFor = (
+  inviterRole: ClientTeamRole,
+): { value: ClientInvitableRole; label: string }[] => {
+  const canInviteAdmins = inviterRole === CLIENT_TEAM_ROLES.superadmin
+  return canInviteAdmins
+    ? [memberInviteOption, viewerInviteOption, adminInviteOption]
+    : [memberInviteOption, viewerInviteOption]
+}
 
 // Narrow the <select>'s raw string back to an invitable role.
 const toInvitableRole = (value: string): ClientInvitableRole =>
-  inviteRoleOptions.find((option) => option.value === value)?.value ?? CLIENT_TEAM_ROLES.member
+  [memberInviteOption, viewerInviteOption, adminInviteOption].find(
+    (option) => option.value === value,
+  )?.value ?? CLIENT_TEAM_ROLES.member
 
 // Inviting is an admin-and-up action; a plain member never sees the control (role-gating by hiding) rather
 // than a button that would only 403.
@@ -219,7 +238,7 @@ export const TeamPage = () => {
                   value={inviteRole}
                   onChange={(event) => setInviteRole(toInvitableRole(event.target.value))}
                 >
-                  {inviteRoleOptions.map((option) => (
+                  {inviteRoleOptionsFor(role).map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>

@@ -11,6 +11,7 @@ import {
 import { env } from '../lib/env.ts'
 import { badRequest, conflict, forbidden } from '../lib/errors.ts'
 import { enqueueEmail } from '../queue/email-queue.ts'
+import { lockTeamRow } from './teams.ts'
 
 // 7 days: long enough to survive a weekend inbox, short enough that a leaked link ages out on its own.
 // Longer than email verification's 24h because an invite is a deliberate hand-off between two people —
@@ -153,6 +154,10 @@ export const acceptTeamInvite = async (input: {
     throw forbidden('invite_email_mismatch', 'This invite was sent to a different email address.')
   }
   await db.transaction(async (tx) => {
+    const isTeamLocked = await lockTeamRow(tx, invite.teamId)
+    if (!isTeamLocked) {
+      throw badRequest('invalid_invite', 'This invite link is invalid or has already been used.')
+    }
     await tx
       .insert(teamMembersTable)
       .values({ teamId: invite.teamId, userId: input.userId, role: invite.role })

@@ -147,7 +147,7 @@ describe('TeamPage', () => {
     expect(screen.queryByLabelText('Email')).not.toBeInTheDocument()
   })
 
-  test('an admin is offered the Member, Viewer and Admin roles', async () => {
+  test('an admin is offered Member and Viewer, not Admin', async () => {
     stubApi({ role: 'admin' })
     renderTeamPage()
     await screen.findByRole('heading', { name: 'Design crew' })
@@ -155,6 +155,15 @@ describe('TeamPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Invite' }))
     expect(screen.getByRole('option', { name: /Member/ })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: /Viewer/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /Admin/ })).not.toBeInTheDocument()
+  })
+
+  test('the superadmin is also offered Admin', async () => {
+    stubApi({ role: 'superadmin' })
+    renderTeamPage()
+    await screen.findByRole('heading', { name: 'Design crew' })
+
+    await userEvent.click(screen.getByRole('button', { name: 'Invite' }))
     expect(screen.getByRole('option', { name: /Admin/ })).toBeInTheDocument()
   })
 })

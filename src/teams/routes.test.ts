@@ -349,6 +349,203 @@ describe('/teams/:teamId — rename and delete', () => {
   })
 })
 
+describe('/teams/:teamId — members: role, remove, leave, transfer', () => {
+  type SignedInTeammate = { token: string; userId: string }
+
+  // A team with one person at every role: the creator is the superadmin; admin, member and viewer are seated
+  // directly.
+  const seedTeamWithEveryRole = async (
+    prefix: string,
+  ): Promise<{
+    teamId: string
+    superadmin: SignedInTeammate
+    admin: SignedInTeammate
+    member: SignedInTeammate
+    viewer: SignedInTeammate
+  }> => {
+    const superadmin = await signInNewUserWithId(`${prefix}-superadmin`)
+    const team = await createTeamAs(superadmin.token, { name: `${prefix} team` })
+    const admin = await signInNewUserWithId(`${prefix}-admin`)
+    const member = await signInNewUserWithId(`${prefix}-member`)
+    const viewer = await signInNewUserWithId(`${prefix}-viewer`)
+    await addTeamMember(team.id, admin.userId, 'admin')
+    await addTeamMember(team.id, member.userId, 'member')
+    await addTeamMember(team.id, viewer.userId, 'viewer')
+    return { teamId: team.id, superadmin, admin, member, viewer }
+  }
+
+  const changeRoleAs = (token: string, teamId: string, targetUserId: string, role: string) =>
+    app.inject({
+      method: 'PATCH',
+      url: `/teams/${teamId}/members/${targetUserId}`,
+      headers: authCookie(token),
+      payload: { role },
+    })
+
+  const removeAs = (token: string, teamId: string, targetUserId: string) =>
+    app.inject({
+      method: 'DELETE',
+      url: `/teams/${teamId}/members/${targetUserId}`,
+      headers: authCookie(token),
+    })
+
+  const transferAs = (token: string, teamId: string, targetUserId: string) =>
+    app.inject({
+      method: 'POST',
+      url: `/teams/${teamId}/transfer`,
+      headers: authCookie(token),
+      payload: { userId: targetUserId },
+    })
+
+  const roleOf = async (
+    token: string,
+    teamId: string,
+    userId: string,
+  ): Promise<string | undefined> => {
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/teams/${teamId}/members`,
+      headers: authCookie(token),
+    })
+    const { members } = listed.json<{ members: { userId: string; role: string }[] }>()
+    return members.find((teamMember) => teamMember.userId === userId)?.role
+  }
+
+  test('only the superadmin makes someone an admin', async () => {
+    const team = await seedTeamWithEveryRole('role-promote')
+    expect(
+      (await changeRoleAs(team.admin.token, team.teamId, team.member.userId, 'admin')).statusCode,
+    ).toBe(403)
+    expect(
+      (await changeRoleAs(team.superadmin.token, team.teamId, team.member.userId, 'admin'))
+        .statusCode,
+    ).toBe(204)
+    expect(await roleOf(team.admin.token, team.teamId, team.member.userId)).toBe('admin')
+  })
+
+  test('an admin moves people between member and viewer', async () => {
+    const team = await seedTeamWithEveryRole('role-member-viewer')
+    expect(
+      (await changeRoleAs(team.admin.token, team.teamId, team.member.userId, 'viewer')).statusCode,
+    ).toBe(204)
+    expect(
+      (await changeRoleAs(team.admin.token, team.teamId, team.viewer.userId, 'member')).statusCode,
+    ).toBe(204)
+  })
+
+  test('only the superadmin demotes an admin', async () => {
+    const team = await seedTeamWithEveryRole('role-demote')
+    const otherAdmin = await signInNewUserWithId('role-demote-other-admin')
+    await addTeamMember(team.teamId, otherAdmin.userId, 'admin')
+
+    expect(
+      (await changeRoleAs(team.admin.token, team.teamId, otherAdmin.userId, 'member')).statusCode,
+    ).toBe(403)
+    expect(
+      (await changeRoleAs(team.superadmin.token, team.teamId, otherAdmin.userId, 'member'))
+        .statusCode,
+    ).toBe(204)
+    expect(await roleOf(team.superadmin.token, team.teamId, otherAdmin.userId)).toBe('member')
+  })
+
+  test("nobody changes the superadmin's role here, and a member changes nobody's", async () => {
+    const team = await seedTeamWithEveryRole('role-deny')
+    expect(
+      (await changeRoleAs(team.admin.token, team.teamId, team.superadmin.userId, 'viewer'))
+        .statusCode,
+    ).toBe(403)
+    expect(
+      (await changeRoleAs(team.member.token, team.teamId, team.viewer.userId, 'member')).statusCode,
+    ).toBe(403)
+  })
+
+  test('superadmin is not a role you can set here — 400', async () => {
+    const team = await seedTeamWithEveryRole('role-bad')
+    const response = await changeRoleAs(
+      team.superadmin.token,
+      team.teamId,
+      team.member.userId,
+      'superadmin',
+    )
+    expect(response.statusCode).toBe(400)
+  })
+
+  test('a non-member caller gets 404; a target outside the team gets 404', async () => {
+    const team = await seedTeamWithEveryRole('role-404')
+    const stranger = await signInNewUserWithId('role-404-stranger')
+    expect(
+      (await changeRoleAs(stranger.token, team.teamId, team.member.userId, 'viewer')).statusCode,
+    ).toBe(404)
+    expect(
+      (await changeRoleAs(team.admin.token, team.teamId, stranger.userId, 'viewer')).statusCode,
+    ).toBe(404)
+  })
+
+  test('remove: allowed only when admin+ and ranked above the target', async () => {
+    const team = await seedTeamWithEveryRole('remove-matrix')
+    const otherAdmin = await signInNewUserWithId('remove-matrix-other-admin')
+    await addTeamMember(team.teamId, otherAdmin.userId, 'admin')
+
+    expect((await removeAs(team.member.token, team.teamId, team.viewer.userId)).statusCode).toBe(
+      403,
+    )
+    expect((await removeAs(team.admin.token, team.teamId, otherAdmin.userId)).statusCode).toBe(403)
+    expect((await removeAs(team.admin.token, team.teamId, team.superadmin.userId)).statusCode).toBe(
+      403,
+    )
+    expect((await removeAs(team.admin.token, team.teamId, team.viewer.userId)).statusCode).toBe(204)
+    expect((await removeAs(team.admin.token, team.teamId, team.member.userId)).statusCode).toBe(204)
+    expect((await removeAs(team.superadmin.token, team.teamId, otherAdmin.userId)).statusCode).toBe(
+      204,
+    )
+
+    const removedMemberView = await app.inject({
+      method: 'GET',
+      url: `/teams/${team.teamId}`,
+      headers: authCookie(team.member.token),
+    })
+    expect(removedMemberView.statusCode).toBe(404)
+  })
+
+  test('a member leaves; the superadmin cannot leave until they transfer — 409', async () => {
+    const team = await seedTeamWithEveryRole('leave')
+    const memberLeaves = await app.inject({
+      method: 'POST',
+      url: `/teams/${team.teamId}/leave`,
+      headers: authCookie(team.member.token),
+    })
+    expect(memberLeaves.statusCode).toBe(204)
+
+    const superadminLeaves = await app.inject({
+      method: 'POST',
+      url: `/teams/${team.teamId}/leave`,
+      headers: authCookie(team.superadmin.token),
+    })
+    expect(superadminLeaves.statusCode).toBe(409)
+    expect(superadminLeaves.json<{ error: string }>().error).toBe('superadmin_must_transfer')
+  })
+
+  test('transfer: the target becomes superadmin and the old superadmin becomes admin', async () => {
+    const team = await seedTeamWithEveryRole('transfer')
+    expect(
+      (await transferAs(team.superadmin.token, team.teamId, team.member.userId)).statusCode,
+    ).toBe(204)
+    expect(await roleOf(team.member.token, team.teamId, team.member.userId)).toBe('superadmin')
+    expect(await roleOf(team.member.token, team.teamId, team.superadmin.userId)).toBe('admin')
+  })
+
+  test('transfer: an admin cannot transfer, and the target must be in the team', async () => {
+    const team = await seedTeamWithEveryRole('transfer-deny')
+    const stranger = await signInNewUserWithId('transfer-deny-stranger')
+    expect((await transferAs(team.admin.token, team.teamId, team.member.userId)).statusCode).toBe(
+      403,
+    )
+    expect((await transferAs(team.superadmin.token, team.teamId, stranger.userId)).statusCode).toBe(
+      404,
+    )
+  })
+})
+
 describe('/teams/:teamId/documents — sharing', () => {
   test('rejects unauthenticated requests with 401', async () => {
     const teamId = randomUUID()

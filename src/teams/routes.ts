@@ -25,13 +25,19 @@ import {
   sendTeamInviteEmail,
 } from './invites.ts'
 import {
+  MEMBERSHIP_CHANGE_RESULTS,
+  type MembershipChangeResult,
+  changeMemberRole,
   createTeam,
   deleteTeam,
   getTeamForMember,
   getTeamNameById,
+  leaveTeam,
   listTeamMembers,
   listTeamsForUser,
+  removeMember,
   renameTeam,
+  transferSuperadmin,
 } from './teams.ts'
 
 // Create and rename both send just the team's name.
@@ -42,6 +48,39 @@ const teamNameBody = z.object({
 const teamIdParams = z.object({
   teamId: z.string().uuid(),
 })
+
+const teamMemberParams = z.object({
+  teamId: z.string().uuid(),
+  userId: z.string().uuid(),
+})
+
+const changeMemberRoleBody = z.object({
+  role: z.enum([TEAM_ROLES.admin, TEAM_ROLES.member, TEAM_ROLES.viewer]),
+})
+
+const transferSuperadminBody = z.object({
+  userId: z.string().uuid(),
+})
+
+// Turns a membership change's result into the HTTP answer: 404 for a team the caller can't see or a
+// target who isn't in it, 403 when the caller's role doesn't allow it, 409 for a superadmin leaving.
+const throwUnlessMembershipChangeDone = (result: MembershipChangeResult): void => {
+  if (result === MEMBERSHIP_CHANGE_RESULTS.teamNotFound) {
+    throw notFound('team_not_found', 'Team not found.')
+  }
+  if (result === MEMBERSHIP_CHANGE_RESULTS.targetNotFound) {
+    throw notFound('member_not_found', 'That person is not in this team.')
+  }
+  if (result === MEMBERSHIP_CHANGE_RESULTS.notAllowed) {
+    throw forbidden('insufficient_team_role', 'You do not have permission to do that.')
+  }
+  if (result === MEMBERSHIP_CHANGE_RESULTS.superadminMustTransfer) {
+    throw conflict(
+      'superadmin_must_transfer',
+      'Transfer the superadmin role to someone else before leaving.',
+    )
+  }
+}
 
 // Every role except superadmin, which changes hands only by transfer.
 const createInviteBody = z.object({
@@ -134,12 +173,20 @@ export const teamRoutes = async (app: FastifyInstance): Promise<void> => {
     return reply.code(204).send()
   })
 
-  // Invite an email to the team, as admin, member or viewer. Admin+ only.
+  // Invite an email to the team. Admin+ invites members and viewers; only the superadmin invites admins.
   app.post('/:teamId/invites', async (req, reply) => {
     const { userId } = getAuthUser(req)
     const { teamId } = parseOrThrow(teamIdParams, req.params)
     const input = parseOrThrow(createInviteBody, req.body)
-    await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.admin })
+    const inviterRole = await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.admin })
+    const isAdminInviteFromNonSuperadmin =
+      input.role === TEAM_ROLES.admin && inviterRole !== TEAM_ROLES.superadmin
+    if (isAdminInviteFromNonSuperadmin) {
+      throw forbidden(
+        'invite_admin_requires_superadmin',
+        'Only the superadmin can invite an admin.',
+      )
+    }
     // Name for the email body. The guard already proved the team exists and the caller may act on it, so a
     // null here is only a delete-mid-request race — reported as the same 404 a non-member would get.
     const teamName = await getTeamNameById(teamId)
@@ -209,6 +256,44 @@ export const teamRoutes = async (app: FastifyInstance): Promise<void> => {
     await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.viewer })
     const members = await listTeamMembers(teamId)
     return { members }
+  })
+
+  // Change a member's role (admin, member or viewer). Rules in changeMemberRole.
+  app.patch('/:teamId/members/:userId', async (req, reply) => {
+    const { userId: actorId } = getAuthUser(req)
+    const { teamId, userId: targetUserId } = parseOrThrow(teamMemberParams, req.params)
+    const input = parseOrThrow(changeMemberRoleBody, req.body)
+    const result = await changeMemberRole({ teamId, actorId, targetUserId, newRole: input.role })
+    throwUnlessMembershipChangeDone(result)
+    return reply.code(204).send()
+  })
+
+  // Remove a member ranked below you. Rules in removeMember.
+  app.delete('/:teamId/members/:userId', async (req, reply) => {
+    const { userId: actorId } = getAuthUser(req)
+    const { teamId, userId: targetUserId } = parseOrThrow(teamMemberParams, req.params)
+    const result = await removeMember({ teamId, actorId, targetUserId })
+    throwUnlessMembershipChangeDone(result)
+    return reply.code(204).send()
+  })
+
+  // Leave the team. The superadmin gets a 409 until they transfer the role.
+  app.post('/:teamId/leave', async (req, reply) => {
+    const { userId } = getAuthUser(req)
+    const { teamId } = parseOrThrow(teamIdParams, req.params)
+    const result = await leaveTeam({ teamId, userId })
+    throwUnlessMembershipChangeDone(result)
+    return reply.code(204).send()
+  })
+
+  // Hand the superadmin role to another member; the caller becomes an admin.
+  app.post('/:teamId/transfer', async (req, reply) => {
+    const { userId: actorId } = getAuthUser(req)
+    const { teamId } = parseOrThrow(teamIdParams, req.params)
+    const input = parseOrThrow(transferSuperadminBody, req.body)
+    const result = await transferSuperadmin({ teamId, actorId, targetUserId: input.userId })
+    throwUnlessMembershipChangeDone(result)
+    return reply.code(204).send()
   })
 
   // The documents shared into this team — the team page's document list. Anyone in the team sees it (a

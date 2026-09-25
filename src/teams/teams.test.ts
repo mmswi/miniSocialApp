@@ -4,7 +4,13 @@ import { inArray } from 'drizzle-orm'
 import { db } from '../db/client.ts'
 import { isUniqueViolation } from '../db/errors.ts'
 import { TEAM_ROLES, teamMembersTable, teamsTable, usersTable } from '../db/schema.ts'
-import { createTeam, getTeamForMember, listTeamsForUser } from './teams.ts'
+import {
+  MEMBERSHIP_CHANGE_RESULTS,
+  createTeam,
+  getTeamForMember,
+  listTeamsForUser,
+  transferSuperadmin,
+} from './teams.ts'
 
 // Integration tests against the dockerized Postgres. A creator (who becomes a team's superadmin) and a
 // stranger (in no team) so the membership scoping is real — a stranger must never reach a team's row.
@@ -117,5 +123,35 @@ describe('teams data access', () => {
     const team = await makeTeam({ name: 'exclusive', creatorId })
     const strangerTeams = await listTeamsForUser(strangerId)
     expect(strangerTeams.map((t) => t.id)).not.toContain(team.id)
+  })
+
+  // Without the team row lock, two transfers read the same roles and the second one fails on the
+  // one-superadmin index. The overlap is timing-dependent, so the race runs 20 times.
+  test('two transfers at the same time: exactly one wins, every time', async () => {
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const superadminId = await seedIsolatedUser()
+      const firstTargetId = await seedIsolatedUser()
+      const secondTargetId = await seedIsolatedUser()
+      const team = await makeTeam({ name: `race ${attempt}`, creatorId: superadminId })
+      await db.insert(teamMembersTable).values([
+        { teamId: team.id, userId: firstTargetId, role: TEAM_ROLES.member },
+        { teamId: team.id, userId: secondTargetId, role: TEAM_ROLES.member },
+      ])
+
+      const results = await Promise.all([
+        transferSuperadmin({ teamId: team.id, actorId: superadminId, targetUserId: firstTargetId }),
+        transferSuperadmin({
+          teamId: team.id,
+          actorId: superadminId,
+          targetUserId: secondTargetId,
+        }),
+      ])
+      const sortedResults = [...results].sort()
+      const expectedResults = [
+        MEMBERSHIP_CHANGE_RESULTS.done,
+        MEMBERSHIP_CHANGE_RESULTS.notAllowed,
+      ].sort()
+      expect(sortedResults).toEqual(expectedResults)
+    }
   })
 })
