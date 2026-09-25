@@ -234,6 +234,35 @@ describe('/teams', () => {
     })
     expect(asStranger.statusCode).toBe(404)
   })
+
+  test('a viewer sees the member list and the document list, but cannot share into the team', async () => {
+    const superadminToken = await signInNewUser('viewer-lists-superadmin')
+    const team = await createTeamAs(superadminToken, { name: 'Viewers welcome' })
+    const sharedDocument = await createDocumentAs(superadminToken, 'Visible to viewers')
+    expect((await assignDocument(superadminToken, team.id, sharedDocument.id)).statusCode).toBe(201)
+    const viewer = await signInNewUserWithId('viewer-lists-viewer')
+    await addTeamMember(team.id, viewer.userId, 'viewer')
+
+    const membersAsViewer = await app.inject({
+      method: 'GET',
+      url: `/teams/${team.id}/members`,
+      headers: authCookie(viewer.token),
+    })
+    expect(membersAsViewer.statusCode).toBe(200)
+
+    const documentsAsViewer = await app.inject({
+      method: 'GET',
+      url: `/teams/${team.id}/documents`,
+      headers: authCookie(viewer.token),
+    })
+    expect(documentsAsViewer.statusCode).toBe(200)
+    const { documents } = documentsAsViewer.json<{ documents: { id: string }[] }>()
+    expect(documents.map((document) => document.id)).toContain(sharedDocument.id)
+
+    const viewersOwnDocument = await createDocumentAs(viewer.token, 'Viewer draft')
+    const shareAsViewer = await assignDocument(viewer.token, team.id, viewersOwnDocument.id)
+    expect(shareAsViewer.statusCode).toBe(403)
+  })
 })
 
 describe('/teams/:teamId/documents — sharing', () => {

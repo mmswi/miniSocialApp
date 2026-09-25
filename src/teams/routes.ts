@@ -174,21 +174,21 @@ export const teamRoutes = async (app: FastifyInstance): Promise<void> => {
     return { team }
   })
 
-  // The team's members — the team page's member list. Member+ to see it (a non-member gets 404, no oracle).
+  // The team's members — the team page's member list. Anyone in the team sees it (a non-member gets 404).
   app.get('/:teamId/members', async (req) => {
     const { userId } = getAuthUser(req)
     const { teamId } = parseOrThrow(teamIdParams, req.params)
-    await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.member })
+    await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.viewer })
     const members = await listTeamMembers(teamId)
     return { members }
   })
 
-  // The documents shared into this team — the team page's document list. Member+ to see it (a non-member
-  // gets 404, never a 403, so the endpoint isn't an existence oracle). Each item carries its owner's name.
+  // The documents shared into this team — the team page's document list. Anyone in the team sees it (a
+  // non-member gets 404). Each item carries its owner's name.
   app.get('/:teamId/documents', async (req) => {
     const { userId } = getAuthUser(req)
     const { teamId } = parseOrThrow(teamIdParams, req.params)
-    await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.member })
+    await requireTeamRole({ teamId, userId, atLeast: TEAM_ROLES.viewer })
     const documents = await listTeamDocuments(teamId)
     return { documents }
   })
